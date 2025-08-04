@@ -5,11 +5,10 @@ from astrbot.api import logger
 @register("autorecall", "YourName", "敏感词自动撤回插件", "1.0.0", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallPlugin(Star):
     def __init__(self, context: Context, config=None):
-    super().__init__(context)
-    self.config = config or {}
-    self.bad_words = self.config.get("bad_words", [])
-    logger.info(f"敏感词列表已加载: {self.bad_words}")
-
+        super().__init__(context)
+        self.config = config or {}
+        self.bad_words = self.config.get("bad_words", [])
+        logger.info(f"敏感词列表已加载: {self.bad_words}")
 
     async def initialize(self):
         logger.info("AutoRecallPlugin 初始化完成。")
