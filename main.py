@@ -12,8 +12,6 @@ class AutoRecallKeywordPlugin(Star):
         self.bad_words = self.config.get("bad_words", [])
         logger.info(f"敏感词关键词列表已加载: {self.bad_words}")
 
-    async def initialize(self):
-       
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
