@@ -20,27 +20,29 @@ class AutoRecallKeywordPlugin(Star):
         self.sub_admin_list = set()
 
     async def initialize(self):
-        config_data = self.config
-        self.bad_words = config_data.get("bad_words", [])
-        spam_config = config_data.get("spam_config", {})
-        admin_config = config_data.get("admin_config", {})
+    config_data = self.config
+    self.bad_words = config_data.get("bad_words", [])
+    spam_config = config_data.get("spam_config", {})
+    admin_config = config_data.get("admin_config", {})
 
-        self.spam_count = spam_config.get("spam_count", 5)
-        self.spam_interval = spam_config.get("spam_interval", 3)
-        self.spam_ban_duration = spam_config.get("spam_ban_duration", 60)
+    self.spam_count = spam_config.get("spam_count", 5)
+    self.spam_interval = spam_config.get("spam_interval", 3)
+    self.spam_ban_duration = spam_config.get("spam_ban_duration", 60)
 
-        self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
-        self.kick_black_list = set(admin_config.get("kick_black_list", []))
-        self.target_user_list = set(admin_config.get("target_user_list", []))
+    # 以配置页面为准，实时刷新内存数据
+    self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
+    self.kick_black_list = set(admin_config.get("kick_black_list", []))
+    self.target_user_list = set(admin_config.get("target_user_list", []))
 
-        self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
-        self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
+    # 同时持久化保存到 json 文件
+    self.save_json_data()
 
-        self.load_json_data()
+    self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
+    self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
 
-        logger.info(f"敏感词列表: {self.bad_words}")
-        logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
-        logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list}")
+    logger.info(f"敏感词列表: {self.bad_words}")
+    logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
+    logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list}")
 
     def load_json_data(self):
         if os.path.exists('cesn_data.json'):
