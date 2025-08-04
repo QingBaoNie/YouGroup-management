@@ -4,7 +4,7 @@ from astrbot.api import logger
 from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core import AstrBotConfig
 
-@register("autorecall", "Qing", "敏感词自动撤回插件(关键词匹配)", "1.0.4", "https://github.com/QingBaoNie/Cesn")
+@register("autorecall", "Qing", "敏感词自动撤回插件(关键词匹配)", "1.0.5", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
