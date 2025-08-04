@@ -3,8 +3,6 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 import time
 from collections import defaultdict, deque
-import json
-import os
 import re
 
 @register("cesn", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.3", "https://github.com/QingBaoNie/Cesn")
@@ -32,8 +30,6 @@ class AutoRecallKeywordPlugin(Star):
         self.kick_black_list = set(admin_config.get("kick_black_list", []))
         self.target_user_list = set(admin_config.get("target_user_list", []))
 
-        self.save_json_data()
-
         self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
         self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
 
@@ -41,15 +37,15 @@ class AutoRecallKeywordPlugin(Star):
         logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
         logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list}")
 
-    def save_json_data(self):
-        data = {
-            'kick_black_list': list(self.kick_black_list),
-            'target_user_list': list(self.target_user_list),
-            'sub_admin_list': list(self.sub_admin_list)
-        }
-        with open('cesn_data.json', 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        logger.info("已保存数据到 cesn_data.json")
+    async def sync_admin_config(self):
+        await self.context.set_config({
+            "admin_config": {
+                "sub_admin_list": list(self.sub_admin_list),
+                "kick_black_list": list(self.kick_black_list),
+                "target_user_list": list(self.target_user_list)
+            }
+        })
+        logger.info("已同步配置到后台管理页面。")
 
     @filter.event_message_type(EventMessageType.GROUP_MEMBER_INCREASE)
     async def welcome_new_member(self, event: AstrMessageEvent):
@@ -130,13 +126,13 @@ class AutoRecallKeywordPlugin(Star):
 
         elif msg.startswith("踢黑"):
             self.kick_black_list.add(target_id)
-            self.save_json_data()
+            await self.sync_admin_config()
             await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入踢黑名单并踢出")
 
         elif msg.startswith("解黑"):
             self.kick_black_list.discard(target_id)
-            self.save_json_data()
+            await self.sync_admin_config()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移出踢黑名单")
 
         elif msg.startswith("踢"):
@@ -145,22 +141,22 @@ class AutoRecallKeywordPlugin(Star):
 
         elif msg.startswith("针对"):
             self.target_user_list.add(target_id)
-            self.save_json_data()
+            await self.sync_admin_config()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入针对名单")
 
         elif msg.startswith("解针对"):
             self.target_user_list.discard(target_id)
-            self.save_json_data()
+            await self.sync_admin_config()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移出针对名单")
 
         elif msg.startswith("设置管理员"):
             self.sub_admin_list.add(target_id)
-            self.save_json_data()
+            await self.sync_admin_config()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已设为子管理员")
 
         elif msg.startswith("移除管理员"):
             self.sub_admin_list.discard(target_id)
-            self.save_json_data()
+            await self.sync_admin_config()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移除子管理员")
 
     async def try_recall(self, event: AstrMessageEvent, message_id: int, group_id: int, sender_id: int):
