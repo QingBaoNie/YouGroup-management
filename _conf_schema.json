@@ -1,8 +1,6 @@
-{
-  "bad_words": {
-    "description": "敏感词列表",
+"bad_words": {
+    "description": "敏感词列表（包含这些关键词的消息将被自动撤回）",
     "type": "list",
-    "hint": "发送消息中包含这些词语时会自动撤回",
-    "default": ["操你妈", "傻逼", "滚蛋"]
-  }
+    "hint": "逐条添加敏感词",
+    "default": []
 }
