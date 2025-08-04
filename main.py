@@ -11,11 +11,11 @@ class AutoRecallKeywordPlugin(Star):
         super().__init__(context)
         self.config = config
 
-        # 初始化缓存
+        # 初始化缓存（先默认5，initialize时会刷新）
         self.user_message_times = defaultdict(lambda: deque(maxlen=5))
         self.user_message_ids = defaultdict(lambda: deque(maxlen=5))
 
-        async def initialize(self):
+    async def initialize(self):
         config_data = self.config  # ← 读取 config，不是 context.get_config()
 
         # 读取敏感词配置
@@ -33,7 +33,6 @@ class AutoRecallKeywordPlugin(Star):
 
         logger.info(f"敏感词关键词列表已加载: {self.bad_words}")
         logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s，禁言{self.spam_ban_duration}s")
-
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
