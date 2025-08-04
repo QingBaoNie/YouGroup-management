@@ -1,22 +1,37 @@
 {
-  "bad_words": {
-    "description": "敏感词关键词列表（模糊匹配）",
-    "type": "list",
-    "hint": "填写需要撤回的关键词，如 '诈骗'、'红包链接'"
+  "bad_words_section": {
+    "type": "section",
+    "title": "敏感词自动撤回",
+    "items": {
+      "bad_words": {
+        "description": "敏感词关键词列表（模糊匹配）",
+        "type": "list",
+        "hint": "填写需要自动撤回的关键词，如 '诈骗'、'红包链接'"
+      }
+    }
   },
-  "spam_count": {
-    "description": "刷屏检测消息数量",
-    "type": "int",
-    "default": 5
-  },
-  "spam_interval": {
-    "description": "刷屏检测时间窗口（秒）",
-    "type": "int",
-    "default": 3
-  },
-  "spam_ban_duration": {
-    "description": "刷屏禁言时长（秒）",
-    "type": "int",
-    "default": 60
+  "spam_detection_section": {
+    "type": "section",
+    "title": "刷屏检测与禁言",
+    "items": {
+      "spam_count": {
+        "description": "刷屏消息数量阈值",
+        "type": "int",
+        "default": 5,
+        "hint": "在指定时间内，用户连续发送消息达到该数量则判定为刷屏"
+      },
+      "spam_interval": {
+        "description": "刷屏检测时间窗口（秒）",
+        "type": "int",
+        "default": 3,
+        "hint": "用户在该时间段内发送spam_count条消息将被判定为刷屏"
+      },
+      "spam_ban_duration": {
+        "description": "刷屏禁言时长（秒）",
+        "type": "int",
+        "default": 60,
+        "hint": "刷屏后将禁言用户的时长"
+      }
+    }
   }
 }
