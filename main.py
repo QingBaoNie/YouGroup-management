@@ -48,9 +48,8 @@ class AutoRecallKeywordPlugin(Star):
         })
         logger.info("已同步配置到后台管理页面。")
 
-@filter.event()  # 改成万能事件监听
+    @filter.event()  # 万能事件监听
     async def universal_handler(self, event: AstrMessageEvent):
-        # 判断是否是“入群事件”
         if hasattr(event.message_obj, 'notice_type') and event.message_obj.notice_type == 'group_increase':
             await self.welcome_new_member(event)
         elif event.message_obj.post_type == 'message':
@@ -69,7 +68,6 @@ class AutoRecallKeywordPlugin(Star):
         )
         logger.info(f"欢迎新成员 {new_user_id} 加入 {group_id}")
 
-    @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
         message_str = event.message_str.strip()
         message_id = event.message_obj.message_id
