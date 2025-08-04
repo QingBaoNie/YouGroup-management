@@ -48,22 +48,26 @@ class AutoRecallKeywordPlugin(Star):
         })
         logger.info("已同步配置到后台管理页面。")
 
-    @filter.event_message_type(EventMessageType.GROUP_NOTICE)
+@filter.event()  # 改成万能事件监听
+    async def universal_handler(self, event: AstrMessageEvent):
+        # 判断是否是“入群事件”
+        if hasattr(event.message_obj, 'notice_type') and event.message_obj.notice_type == 'group_increase':
+            await self.welcome_new_member(event)
+        elif event.message_obj.post_type == 'message':
+            await self.auto_recall(event)
+
     async def welcome_new_member(self, event: AstrMessageEvent):
-    if event.notice_type != 'group_increase':
-        return  # 不是入群事件，忽略
+        group_id = event.get_group_id()
+        new_user_id = event.get_sender_id()
 
-    group_id = event.get_group_id()
-    new_user_id = event.get_sender_id()
+        at_segment = {"type": "At", "qq": str(new_user_id)}
+        text_segment = {"type": "Plain", "text": " 欢迎加入本群！大家快来打个招呼吧~"}
 
-    at_segment = {"type": "At", "qq": str(new_user_id)}
-    text_segment = {"type": "Plain", "text": " 欢迎加入本群！大家快来打个招呼吧~"}
-
-    await event.bot.send_group_msg(
-        group_id=int(group_id),
-        message=[at_segment, text_segment]
-    )
-
+        await event.bot.send_group_msg(
+            group_id=int(group_id),
+            message=[at_segment, text_segment]
+        )
+        logger.info(f"欢迎新成员 {new_user_id} 加入 {group_id}")
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
