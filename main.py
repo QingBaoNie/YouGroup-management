@@ -104,19 +104,30 @@ class AutoRecallKeywordPlugin(Star):
 
         await self.handle_commands(event)
 
-    async def handle_commands(self, event: AstrMessageEvent):
+        async def handle_commands(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
         group_id = event.get_group_id()
 
-        # 直接从 message_str 提取 @对象ID
-        match = re.search(r"\[At:(\d+)\]", msg)
-        if not match:
-            logger.info("没有@到任何人，跳过命令处理")
-            return
+        # 先尝试获取 at_list
+        at_list = getattr(event.message_obj, 'at_list', None)
+        if not at_list:
+            at_list = getattr(event.message_obj, 'mentions', None)
 
-        target_id = match.group(1)
+        # 如果有 at_list 则取第一个
+        if at_list and len(at_list) > 0:
+            target_id = str(at_list[0])
+        else:
+            # 如果没有 at_list 再从 message_str 里提取 [At:123456]
+            match = re.search(r"\[At:(\d+)\]", msg)
+            if match:
+                target_id = match.group(1)
+            else:
+                logger.info("没有@到任何人，跳过命令处理")
+                return
+
         logger.info(f"检测到命令针对@{target_id}")
 
+        # 后续命令处理不变
         if msg.startswith("禁言"):
             duration_match = re.search(r"禁言.*?(\d+)?$", msg)
             duration = int(duration_match.group(1)) * 60 if duration_match and duration_match.group(1) else 600
@@ -161,6 +172,7 @@ class AutoRecallKeywordPlugin(Star):
             self.sub_admin_list.discard(target_id)
             self.save_json_data()
             await event.bot.send_group_msg(group_id, f"{target_id} 已移除子管理员")
+
 
     async def try_recall(self, event: AstrMessageEvent, message_id: int, group_id: int, sender_id: int):
         try:
