@@ -3,11 +3,11 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from astrbot.core.star.filter.event_message_type import EventMessageType
 
-@register("autorecall", "YourName", "敏感词自动撤回插件(关键词匹配)", "1.0.4", "https://github.com/QingBaoNie/Cesn")
+@register("autorecall", "YourName", "敏感词自动撤回插件(关键词匹配)", "1.0.3", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
-        config_data = context.get_config(force_reload=True)  # <-- 强制刷新配置
+        config_data = context.config  # <<<<<<<< 关键点
         self.bad_words = config_data.get("bad_words", [])
         logger.info(f"敏感词关键词列表已加载: {self.bad_words}")
 
