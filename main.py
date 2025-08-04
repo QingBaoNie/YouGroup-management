@@ -48,7 +48,7 @@ class AutoRecallKeywordPlugin(Star):
         })
         logger.info("已同步配置到后台管理页面。")
 
-    @filter.event_message_type(EventMessageType.GROUP_MEMBER_JOIN)
+    @filter.event_message_type(EventMessageType.GROUP_MEMBER_ADD)
     async def welcome_new_member(self, event: AstrMessageEvent):
         group_id = event.get_group_id()
         new_user_id = event.get_sender_id()
