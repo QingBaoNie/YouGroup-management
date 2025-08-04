@@ -10,20 +10,19 @@
   "spam_config": {
     "description": "刷屏检测配置",
     "type": "object",
-    "hint": "用于检测用户短时间内连续发言并禁言",
     "items": {
       "spam_count": {
-        "description": "检测在X秒内发送X条信息的数量阈值",
+        "description": "检测在X秒发送X条信息(3条)",
         "type": "int",
         "default": 3
       },
       "spam_interval": {
-        "description": "检测的时间窗口（秒）",
+        "description": "检测在X秒(1秒)",
         "type": "int",
         "default": 1
       },
       "spam_ban_duration": {
-        "description": "触发刷屏后的禁言时长（秒）",
+        "description": "刷屏禁言时长（秒）",
         "type": "int",
         "default": 60
       }
