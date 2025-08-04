@@ -1,7 +1,6 @@
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import filter, AstrMessageEvent, EventMessageType
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
-from astrbot.core.star.filter.event_message_type import EventMessageType
 import time
 from collections import defaultdict, deque
 import json
@@ -29,12 +28,10 @@ class AutoRecallKeywordPlugin(Star):
         self.spam_interval = spam_config.get("spam_interval", 3)
         self.spam_ban_duration = spam_config.get("spam_ban_duration", 60)
 
-        # 实时刷新配置数据（优先配置）
         self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
         self.kick_black_list = set(admin_config.get("kick_black_list", []))
         self.target_user_list = set(admin_config.get("target_user_list", []))
 
-        # 同步保存到 JSON 文件（仅做持久化）
         self.save_json_data()
 
         self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
@@ -53,20 +50,19 @@ class AutoRecallKeywordPlugin(Star):
         with open('cesn_data.json', 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info("已保存数据到 cesn_data.json")
+
     @filter.event_message_type(EventMessageType.GROUP_MEMBER_INCREASE)
     async def welcome_new_member(self, event: AstrMessageEvent):
-    group_id = event.get_group_id()
-    new_user_id = event.get_sender_id()
+        group_id = event.get_group_id()
+        new_user_id = event.get_sender_id()
 
-    # 构建 @用户 组件
-    at_segment = {"type": "At", "qq": str(new_user_id)}
-    text_segment = {"type": "Plain", "text": " 欢迎加入本群！大家快来打个招呼吧~"}
+        at_segment = {"type": "At", "qq": str(new_user_id)}
+        text_segment = {"type": "Plain", "text": " 欢迎加入本群！大家快来打个招呼吧~"}
 
-    # 发送消息 (组件格式)
-    await event.bot.send_group_msg(
-        group_id=int(group_id),
-        message=[at_segment, text_segment]
-    )
+        await event.bot.send_group_msg(
+            group_id=int(group_id),
+            message=[at_segment, text_segment]
+        )
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
