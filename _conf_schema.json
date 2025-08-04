@@ -7,25 +7,19 @@
     },
     "hint": "填写需要撤回的关键词，如 '诈骗'、'红包链接'"
   },
-  "spam_settings": {
-    "description": "刷屏检测配置",
-    "type": "object",
-    "properties": {
-      "spam_count": {
-        "description": "刷屏检测消息数量",
-        "type": "int",
-        "default": 5
-      },
-      "spam_interval": {
-        "description": "刷屏检测时间窗口（秒）",
-        "type": "int",
-        "default": 3
-      },
-      "spam_ban_duration": {
-        "description": "刷屏禁言时长（秒）",
-        "type": "int",
-        "default": 60
-      }
-    }
+  "spam_count": {
+    "description": "刷屏检测消息数量",
+    "type": "int",
+    "default": 5
+  },
+  "spam_interval": {
+    "description": "刷屏检测时间窗口（秒）",
+    "type": "int",
+    "default": 3
+  },
+  "spam_ban_duration": {
+    "description": "刷屏禁言时长（秒）",
+    "type": "int",
+    "default": 60
   }
 }
