@@ -1,20 +1,22 @@
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
+from astrbot.core import AstrBotConfig
 
 @register("autorecall", "YourName", "敏感词自动撤回插件", "1.0.0")
 class AutoRecallPlugin(Star):
-    def __init__(self, context: Context, config: dict):  # ← 一定要写 config
+    def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
-        self.config = config  # ← 保存 config
-        self.bad_words = self.config.get("bad_words", [])  # ← 这里读取
+        self.config = config  # 保存 config
+        self.bad_words = config.get("bad_words", [])  # 从配置读取敏感词
         logger.info(f"敏感词列表已加载: {self.bad_words}")
 
     async def initialize(self):
         logger.info("AutoRecallPlugin 初始化完成。")
 
-    @filter.message()
-    async def auto_recall_bad_words(self, event: AstrMessageEvent, context: Context, *args, **kwargs):
+    @filter.command("撤回敏感词")
+    async def auto_recall_bad_words(self, event: AstrMessageEvent):
+        """监听消息，检测敏感词并撤回"""
         message_str = event.message_str.strip()
         logger.info(f"接收到消息: {message_str}")
 
