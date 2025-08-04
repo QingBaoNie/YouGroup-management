@@ -82,51 +82,74 @@ class AutoRecallKeywordPlugin(Star):
         await self.handle_commands(event, message_str)
 
     async def handle_commands(self, event: AstrMessageEvent, msg: str):
-        # 群管命令处理逻辑
-        if match := re.match(r"禁言@(\d+)(?: (\d+))?", msg):
-            user_id = match.group(1)
-            duration = int(match.group(2)) * 60 if match.group(2) else 600
-            await event.bot.set_group_ban(group_id=int(event.get_group_id()), user_id=int(user_id), duration=duration)
-            await event.bot.send_group_msg(event.get_group_id(), f"已禁言 {user_id} {duration//60}分钟")
-        elif match := re.match(r"解禁@(\d+)", msg):
-            user_id = match.group(1)
-            await event.bot.set_group_ban(group_id=int(event.get_group_id()), user_id=int(user_id), duration=0)
-            await event.bot.send_group_msg(event.get_group_id(), f"已解除 {user_id} 禁言")
-        elif match := re.match(r"踢@(\d+)", msg):
-            user_id = match.group(1)
-            await event.bot.set_group_kick(group_id=int(event.get_group_id()), user_id=int(user_id))
-            await event.bot.send_group_msg(event.get_group_id(), f"已踢出 {user_id}")
-        elif match := re.match(r"踢黑@(\d+)", msg):
-            user_id = match.group(1)
-            self.kick_black_list.add(user_id)
-            await event.bot.set_group_kick(group_id=int(event.get_group_id()), user_id=int(user_id))
-            await event.bot.send_group_msg(event.get_group_id(), f"{user_id} 已加入踢黑名单并踢出")
-        elif match := re.match(r"解黑@(\d+)", msg):
-            user_id = match.group(1)
-            self.kick_black_list.discard(user_id)
-            await event.bot.send_group_msg(event.get_group_id(), f"{user_id} 已移出踢黑名单")
-        elif match := re.match(r"针对@(\d+)", msg):
-            user_id = match.group(1)
-            self.target_user_list.add(user_id)
-            await event.bot.send_group_msg(event.get_group_id(), f"{user_id} 已加入针对名单")
-        elif match := re.match(r"解针对@(\d+)", msg):
-            user_id = match.group(1)
-            self.target_user_list.discard(user_id)
-            await event.bot.send_group_msg(event.get_group_id(), f"{user_id} 已移出针对名单")
-        elif match := re.match(r"设置管理员@(\d+)", msg):
-            user_id = match.group(1)
-            self.sub_admin_list.add(user_id)
-            await event.bot.send_group_msg(event.get_group_id(), f"{user_id} 已设为子管理员")
-        elif match := re.match(r"移除管理员@(\d+)", msg):
-            user_id = match.group(1)
-            self.sub_admin_list.discard(user_id)
-            await event.bot.send_group_msg(event.get_group_id(), f"{user_id} 已移除子管理员")
+    match = re.search(r"\[At:(\d+)]", msg)
+    if not match:
+        return  # 没@人则忽略
+
+    target_id = match.group(1)
+    group_id = event.get_group_id()
+
+    # 禁言@用户 [可选时长]
+    if msg.startswith("禁言"):
+        duration_match = re.search(r"禁言.*?(\d+)?$", msg)
+        duration = int(duration_match.group(1)) * 60 if duration_match and duration_match.group(1) else 600
+        await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=duration)
+        await event.bot.send_group_msg(group_id, f"已禁言 {target_id} {duration//60}分钟")
+
+    elif msg.startswith("解禁"):
+        await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=0)
+        await event.bot.send_group_msg(group_id, f"已解除 {target_id} 禁言")
+
+    elif msg.startswith("踢黑"):
+        self.kick_black_list.add(str(target_id))
+        await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
+        await event.bot.send_group_msg(group_id, f"{target_id} 已加入踢黑名单并踢出")
+
+    elif msg.startswith("解黑"):
+        self.kick_black_list.discard(str(target_id))
+        await event.bot.send_group_msg(group_id, f"{target_id} 已移出踢黑名单")
+
+    elif msg.startswith("踢"):
+        await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
+        await event.bot.send_group_msg(group_id, f"已踢出 {target_id}")
+
+    elif msg.startswith("针对"):
+        self.target_user_list.add(str(target_id))
+        await event.bot.send_group_msg(group_id, f"{target_id} 已加入针对名单")
+
+    elif msg.startswith("解针对"):
+        self.target_user_list.discard(str(target_id))
+        await event.bot.send_group_msg(group_id, f"{target_id} 已移出针对名单")
+
+    elif msg.startswith("设置管理员"):
+        self.sub_admin_list.add(str(target_id))
+        await event.bot.send_group_msg(group_id, f"{target_id} 已设为子管理员")
+
+    elif msg.startswith("移除管理员"):
+        self.sub_admin_list.discard(str(target_id))
+        await event.bot.send_group_msg(group_id, f"{target_id} 已移除子管理员")
+
 
     async def try_recall(self, event: AstrMessageEvent, message_id: int, group_id: int, sender_id: int):
+    try:
+        await event.bot.delete_msg(message_id=int(message_id))
+    except Exception as e:
+        # 无论什么异常都去查用户角色
         try:
-            await event.bot.delete_msg(message_id=int(message_id))
-        except Exception as e:
-            logger.error(f"撤回失败: {e}")
+            member_info = await event.bot.get_group_member_info(
+                group_id=int(group_id),
+                user_id=int(sender_id)
+            )
+            role = member_info.get('role', 'member')
+            if role == 'owner':
+                logger.error(f"撤回失败: 对方是群主({sender_id})，无权限撤回。")
+            elif role == 'admin':
+                logger.error(f"撤回失败: 对方是管理员({sender_id})，无权限撤回。")
+            else:
+                logger.error(f"撤回失败: {e}（用户角色: {role}）")
+        except Exception as ex:
+            logger.error(f"撤回失败且查询用户角色失败: {e} / 查询错误: {ex}")
+
 
     async def terminate(self):
         logger.info("AutoRecallKeywordPlugin 插件已被卸载。")
