@@ -1,5 +1,5 @@
-name: helloworld  # 插件唯一识别名（不要用中文！不要加引号）
-desc: 这是 AstrBot 的默认插件，支持关键词回复。  # 插件简短描述
-version: v1.1  # 插件版本号，v1.1 或 v1.1.1
-author: Qing  # 作者
-repo: https://github.com/QingBaoNie/Cesn  # 插件仓库地址
+name: autorecall  # 插件唯一标识符，只能用英文小写
+desc: 敏感词自动撤回插件  # 简短描述
+version: v1.0.0  # 插件版本
+author: YourName  # 作者
+repo: https://github.com/QingBaoNie/Cesn  # 仓库地址
