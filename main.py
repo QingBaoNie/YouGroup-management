@@ -104,7 +104,7 @@ class AutoRecallKeywordPlugin(Star):
 
         await self.handle_commands(event)
 
-        async def handle_commands(self, event: AstrMessageEvent):
+    async def handle_commands(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
         group_id = event.get_group_id()
 
@@ -172,7 +172,6 @@ class AutoRecallKeywordPlugin(Star):
             self.sub_admin_list.discard(target_id)
             self.save_json_data()
             await event.bot.send_group_msg(group_id, f"{target_id} 已移除子管理员")
-
 
     async def try_recall(self, event: AstrMessageEvent, message_id: int, group_id: int, sender_id: int):
         try:
