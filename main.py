@@ -11,17 +11,17 @@ class AutoRecallKeywordPlugin(Star):
         super().__init__(context)
         self.config = config
 
-        # 初始化缓存（会在 initialize 时根据配置刷新容量）
+        # 缓存初始化（容量稍后由配置刷新）
         self.user_message_times = defaultdict(lambda: deque(maxlen=5))
         self.user_message_ids = defaultdict(lambda: deque(maxlen=5))
 
     async def initialize(self):
-        config_data = self.config  # ← 读取config，不用 context.get_config()
+        config_data = self.config  # ← 读取传入的config参数，不用 context.get_config()
 
         # 读取敏感词配置
         self.bad_words = config_data.get("bad_words", [])
 
-        # 读取刷屏检测配置 (包裹在 spam_config 里)
+        # 读取刷屏检测配置（spam_config）
         spam_config = config_data.get("spam_config", {})
         self.spam_count = spam_config.get("spam_count", 5)
         self.spam_interval = spam_config.get("spam_interval", 3)
@@ -50,7 +50,7 @@ class AutoRecallKeywordPlugin(Star):
                 await self.try_recall(event, message_id, group_id, sender_id)
                 return
 
-        # 刷屏检测
+        # 刷屏检测逻辑
         now = time.time()
         key = (group_id, sender_id)
         self.user_message_times[key].append(now)
@@ -60,7 +60,7 @@ class AutoRecallKeywordPlugin(Star):
             time_window = now - self.user_message_times[key][0]
             if time_window <= self.spam_interval:
                 logger.info(f"检测到用户 {sender_id} 在群 {group_id} 刷屏，准备禁言并撤回消息")
-                # 禁言
+
                 try:
                     await event.bot.set_group_ban(
                         group_id=int(group_id),
@@ -71,7 +71,6 @@ class AutoRecallKeywordPlugin(Star):
                 except Exception as e:
                     logger.error(f"禁言失败: {e}")
 
-                # 撤回刷屏消息
                 for msg_id in self.user_message_ids[key]:
                     try:
                         await event.bot.delete_msg(message_id=int(msg_id))
@@ -79,7 +78,6 @@ class AutoRecallKeywordPlugin(Star):
                     except Exception as e:
                         logger.error(f"撤回刷屏消息ID {msg_id} 失败: {e}")
 
-                # 清空缓存
                 self.user_message_times[key].clear()
                 self.user_message_ids[key].clear()
 
