@@ -20,39 +20,29 @@ class AutoRecallKeywordPlugin(Star):
         self.sub_admin_list = set()
 
     async def initialize(self):
-    config_data = self.config
-    self.bad_words = config_data.get("bad_words", [])
-    spam_config = config_data.get("spam_config", {})
-    admin_config = config_data.get("admin_config", {})
+        config_data = self.config
+        self.bad_words = config_data.get("bad_words", [])
+        spam_config = config_data.get("spam_config", {})
+        admin_config = config_data.get("admin_config", {})
 
-    self.spam_count = spam_config.get("spam_count", 5)
-    self.spam_interval = spam_config.get("spam_interval", 3)
-    self.spam_ban_duration = spam_config.get("spam_ban_duration", 60)
+        self.spam_count = spam_config.get("spam_count", 5)
+        self.spam_interval = spam_config.get("spam_interval", 3)
+        self.spam_ban_duration = spam_config.get("spam_ban_duration", 60)
 
-    # 以配置页面为准，实时刷新内存数据
-    self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
-    self.kick_black_list = set(admin_config.get("kick_black_list", []))
-    self.target_user_list = set(admin_config.get("target_user_list", []))
+        # 实时刷新配置数据（优先配置）
+        self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
+        self.kick_black_list = set(admin_config.get("kick_black_list", []))
+        self.target_user_list = set(admin_config.get("target_user_list", []))
 
-    # 同时持久化保存到 json 文件
-    self.save_json_data()
+        # 同步保存到 JSON 文件（仅做持久化）
+        self.save_json_data()
 
-    self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
-    self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
+        self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
+        self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
 
-    logger.info(f"敏感词列表: {self.bad_words}")
-    logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
-    logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list}")
-
-    def load_json_data(self):
-        if os.path.exists('cesn_data.json'):
-            with open('cesn_data.json', 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                self.kick_black_list = set(data.get('kick_black_list', []))
-                self.target_user_list = set(data.get('target_user_list', []))
-                self.sub_admin_list = set(data.get('sub_admin_list', []))
-        else:
-            self.save_json_data()
+        logger.info(f"敏感词列表: {self.bad_words}")
+        logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
+        logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list}")
 
     def save_json_data(self):
         data = {
@@ -72,25 +62,21 @@ class AutoRecallKeywordPlugin(Star):
         group_id = event.get_group_id()
         sender_id = event.get_sender_id()
 
-        # 黑名单自动踢
         if str(sender_id) in self.kick_black_list:
             await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
-            await event.bot.send_group_msg(group_id, f"检测到黑名单用户 {sender_id}，已踢出！")
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
             return
 
-        # 针对名单静默撤回
         if str(sender_id) in self.target_user_list:
             await event.bot.delete_msg(message_id=int(message_id))
             logger.info(f"静默撤回 {sender_id} 的消息")
             return
 
-        # 敏感词检测
         for word in self.bad_words:
             if word in message_str:
                 await self.try_recall(event, message_id, group_id, sender_id)
                 return
 
-        # 刷屏检测
         now = time.time()
         key = (group_id, sender_id)
         self.user_message_times[key].append(now)
@@ -110,7 +96,6 @@ class AutoRecallKeywordPlugin(Star):
         msg = event.message_str.strip()
         group_id = event.get_group_id()
 
-        # 遍历 message_obj.message 找到 At 类型
         at_list = []
         for segment in getattr(event.message_obj, 'message', []):
             if getattr(segment, 'type', '') == 'At':
@@ -123,7 +108,6 @@ class AutoRecallKeywordPlugin(Star):
         target_id = str(at_list[0])
         logger.info(f"检测到命令针对@{target_id}")
 
-        # 后续命令处理不变
         if msg.startswith("禁言"):
             duration_match = re.search(r"禁言.*?(\d+)?$", msg)
             duration = int(duration_match.group(1)) * 60 if duration_match and duration_match.group(1) else 600
@@ -132,7 +116,7 @@ class AutoRecallKeywordPlugin(Star):
 
         elif msg.startswith("解禁") or msg.startswith("解言"):
             await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=0)
-            await event.bot.send_group_msg(group_id, f"已解除 {target_id} 禁言")
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"已解除 {target_id} 禁言")
 
         elif msg.startswith("踢黑"):
             self.kick_black_list.add(target_id)
@@ -152,7 +136,7 @@ class AutoRecallKeywordPlugin(Star):
         elif msg.startswith("针对"):
             self.target_user_list.add(target_id)
             self.save_json_data()
-            await event.bot.send_group_msg(group_id, f"{target_id} 已加入针对名单")
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入针对名单")
 
         elif msg.startswith("解针对"):
             self.target_user_list.discard(target_id)
