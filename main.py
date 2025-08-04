@@ -22,9 +22,12 @@ class AutoRecallPlugin(Star):
         group_id = event.get_group_id()
         sender_id = event.get_sender_id()
         message_str = event.message_str.strip()
+
         if self.group_whitelist and group_id not in self.group_whitelist:
             return
+
         logger.info(f"[{group_id}] {sender_id}: {message_str}")
+
         for word in self.bad_words:
             if word in message_str:
                 logger.info(f"检测到敏感词 '{word}'，撤回并禁言 {sender_id}")
@@ -32,6 +35,7 @@ class AutoRecallPlugin(Star):
                     await event.bot.delete_msg(message_id=int(event.message_obj.message_id))
                 except Exception as e:
                     logger.error(f"撤回消息失败: {e}")
+
                 if self.ban_duration > 0:
                     try:
                         await event.bot.set_group_ban(
@@ -41,6 +45,7 @@ class AutoRecallPlugin(Star):
                         )
                     except Exception as e:
                         logger.error(f"禁言失败: {e}")
+
                 yield event.plain_result(f"⚠️ {event.get_sender_name()} 发送了违禁词，已被撤回并禁言{self.ban_duration}s。")
                 return
 
