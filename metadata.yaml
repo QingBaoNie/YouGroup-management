@@ -1,5 +1,5 @@
-name: cesn  # ← 改成和目录名一致（cesn）
-version: 1.0.5
+name: cesn  
+version: 1.0.6
 author: Qing
 description: 敏感词自动撤回插件
 repo: https://github.com/QingBaoNie/Cesn
