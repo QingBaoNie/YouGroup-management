@@ -1,8 +1,8 @@
 {
-    "bad_words": {
-        "description": "敏感词列表（包含这些关键词的消息将被自动撤回）",
-        "type": "list",
-        "hint": "逐条添加敏感词",
-        "default": []
-    }
+  "bad_words": {
+    "description": "敏感词列表（包含这些关键词的消息将被自动撤回）",
+    "type": "list",
+    "hint": "逐条添加敏感词",
+    "default": []
+  }
 }
