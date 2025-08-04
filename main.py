@@ -53,6 +53,20 @@ class AutoRecallKeywordPlugin(Star):
         with open('cesn_data.json', 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info("已保存数据到 cesn_data.json")
+    @filter.event_message_type(EventMessageType.GROUP_MEMBER_INCREASE)
+    async def welcome_new_member(self, event: AstrMessageEvent):
+    group_id = event.get_group_id()
+    new_user_id = event.get_sender_id()
+
+    # 构建 @用户 组件
+    at_segment = {"type": "At", "qq": str(new_user_id)}
+    text_segment = {"type": "Plain", "text": " 欢迎加入本群！大家快来打个招呼吧~"}
+
+    # 发送消息 (组件格式)
+    await event.bot.send_group_msg(
+        group_id=int(group_id),
+        message=[at_segment, text_segment]
+    )
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
