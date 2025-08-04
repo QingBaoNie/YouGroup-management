@@ -6,24 +6,32 @@ from astrbot.core import AstrBotConfig
 import time
 from collections import defaultdict, deque
 
-@register("cesn", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测)", "1.0.7", "https://github.com/QingBaoNie/Cesn")
+@register("cesn", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测)", "1.0.8", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
+        self.context = context
         self.config = config
-        config_data = context.get_config()
+        self.user_message_times = defaultdict(deque)
+        self.user_message_ids = defaultdict(deque)
 
+    async def initialize(self):
+        logger.info("AutoRecallKeywordPlugin 初始化完成。")
+        await self.refresh_config()
+
+    async def refresh_config(self):
+        config_data = self.context.get_config(force_reload=True)
         self.bad_words = config_data.get("bad_words", [])
-        # 刷屏检测配置
-        self.spam_count = config_data.get("spam_count", 5)  # 连续消息数
-        self.spam_interval = config_data.get("spam_interval", 3)  # 时间窗口(秒)
-        self.spam_ban_duration = config_data.get("spam_ban_duration", 60)  # 禁言时长(秒)
+        self.spam_count = config_data.get("spam_count", 5)
+        self.spam_interval = config_data.get("spam_interval", 3)
+        self.spam_ban_duration = config_data.get("spam_ban_duration", 60)
 
+        logger.info(f"刷新配置：敏感词: {self.bad_words}")
+        logger.info(f"刷屏检测: {self.spam_count}条/{self.spam_interval}s，禁言{self.spam_ban_duration}s")
+
+        # 刷新 deque 长度
         self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
         self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
-
-        logger.info(f"敏感词关键词列表已加载: {self.bad_words}")
-        logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s，禁言{self.spam_ban_duration}s")
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
@@ -34,14 +42,14 @@ class AutoRecallKeywordPlugin(Star):
 
         logger.info(f"收到消息: [{group_id}] {sender_id}: {message_str}")
 
-        # 关键词撤回检测
+        # 敏感词检测
         for word in self.bad_words:
             if word in message_str:
                 logger.info(f"检测到敏感词 '{word}'，准备撤回消息 {message_id}")
                 await self.try_recall(event, message_id, group_id, sender_id)
                 return
 
-        # 刷屏检测逻辑
+        # 刷屏检测
         now = time.time()
         key = (group_id, sender_id)
         self.user_message_times[key].append(now)
@@ -51,7 +59,7 @@ class AutoRecallKeywordPlugin(Star):
             time_window = now - self.user_message_times[key][0]
             if time_window <= self.spam_interval:
                 logger.info(f"检测到用户 {sender_id} 在群 {group_id} 刷屏，准备禁言并撤回消息")
-                # 禁言用户
+                # 禁言
                 try:
                     await event.bot.set_group_ban(
                         group_id=int(group_id),
@@ -62,16 +70,22 @@ class AutoRecallKeywordPlugin(Star):
                 except Exception as e:
                     logger.error(f"禁言失败: {e}")
 
-                # 撤回刷屏消息（撤回记录的消息ID）
+                # 撤回刷屏消息
                 for msg_id in self.user_message_ids[key]:
                     try:
                         await event.bot.delete_msg(message_id=int(msg_id))
                         logger.info(f"已撤回刷屏消息ID {msg_id}")
                     except Exception as e:
                         logger.error(f"撤回刷屏消息ID {msg_id} 失败: {e}")
+
                 # 清空记录
                 self.user_message_times[key].clear()
                 self.user_message_ids[key].clear()
+
+    @filter.command("刷新配置")
+    async def manual_refresh_config(self, event: AstrMessageEvent):
+        await self.refresh_config()
+        await event.send(event.plain_result("配置已刷新成功。"))
 
     async def try_recall(self, event: AstrMessageEvent, message_id: int, group_id: int, sender_id: int):
         try:
