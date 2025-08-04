@@ -10,8 +10,9 @@ class AutoRecallPlugin(Star):
         config_data = context.get_config()
 
         self.bad_words = config_data.get("bad_words", [])
-        self.ban_duration = config_data.get("ban_duration", 60)  # 单位秒
+        self.ban_duration = config_data.get("ban_duration", 60)  # 禁言时长，单位秒
         self.group_whitelist = config_data.get("group_whitelist", [])  # 群聊白名单
+
         logger.info(f"敏感词列表已加载: {self.bad_words}")
         logger.info(f"白名单群聊: {self.group_whitelist}, 禁言时长: {self.ban_duration}s")
 
@@ -52,9 +53,9 @@ class AutoRecallPlugin(Star):
                     except Exception as e:
                         logger.error(f"禁言失败: {e}")
 
-                # 警告提示
+                # 提示消息
                 yield event.plain_result(f"⚠️ {event.get_sender_name()} 发送了违禁词，已被撤回并禁言{self.ban_duration}s。")
-                return
+                return  # 检测到第一个违禁词后就返回，不继续循环
 
     async def terminate(self):
         logger.info("AutoRecallPlugin 插件已被卸载。")
