@@ -21,10 +21,7 @@ class AutoRecallKeywordPlugin(Star):
         message_id = event.message_obj.message_id
         group_id = event.get_group_id()
         sender_id = event.get_sender_id()
-
         logger.info(f"收到消息: [{group_id}] {sender_id}: {message_str}")
-        logger.info(f"消息ID: {message_id}")
-
         for word in self.bad_words:
             if word in message_str:
                 logger.info(f"检测到敏感词 '{word}'，准备撤回消息 {message_id}")
