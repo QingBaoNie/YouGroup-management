@@ -28,7 +28,7 @@
       }
     }
   },
-  "group_manage_config": {
+  "admin_config": {
     "description": "群管功能配置",
     "type": "object",
     "items": {
@@ -36,18 +36,27 @@
         "description": "子管理列表",
         "type": "list",
         "items": {
-          "type": "int"
+          "type": "string"
         },
-        "hint": "填写子管理员的QQ号（纯数字），具有部分管理权限",
+        "hint": "填写子管理QQ号列表（如：123456789）",
         "default": []
       },
-      "kick_blacklist": {
-        "description": "踢黑列表",
+      "kick_black_list": {
+        "description": "踢黑名单列表",
         "type": "list",
         "items": {
-          "type": "int"
+          "type": "string"
         },
-        "hint": "在此列表中的QQ号进入群后将会被自动踢出",
+        "hint": "被列入黑名单的用户将被自动踢出群聊",
+        "default": []
+      },
+      "target_user_list": {
+        "description": "针对用户列表",
+        "type": "list",
+        "items": {
+          "type": "string"
+        },
+        "hint": "对特定用户执行定向操作，如重点监控、自动禁言等",
         "default": []
       }
     }
