@@ -6,8 +6,9 @@ import time
 from collections import defaultdict, deque
 import json
 import os
+import re
 
-@register("cesn", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.2", "https://github.com/QingBaoNie/Cesn")
+@register("cesn", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.3", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config):
         super().__init__(context)
@@ -63,6 +64,7 @@ class AutoRecallKeywordPlugin(Star):
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
+        logger.info(f"收到 message_obj: {event.message_obj}")
         message_str = event.message_str.strip()
         message_id = event.message_obj.message_id
         group_id = event.get_group_id()
@@ -105,12 +107,18 @@ class AutoRecallKeywordPlugin(Star):
     async def handle_commands(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
         group_id = event.get_group_id()
-        at_list = getattr(event.message_obj, 'at_list', [])
+
+        # 修正at_list字段名称 (根据框架实际情况可能是 'mentions', 'at_users')
+        at_list = getattr(event.message_obj, 'at_list', None)
+        if not at_list:
+            at_list = getattr(event.message_obj, 'mentions', [])
 
         if not at_list:
-            return  # 没@人则忽略
+            logger.info("没有@到任何人，跳过命令处理")
+            return
 
         target_id = str(at_list[0])
+        logger.info(f"检测到命令针对@{target_id}")
 
         if msg.startswith("禁言"):
             duration_match = re.search(r"禁言.*?(\d+)?$", msg)
