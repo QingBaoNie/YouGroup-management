@@ -1,20 +1,26 @@
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
+from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
-from astrbot.api import logger # 使用 astrbot 提供的 logger 接口
+from astrbot.api import logger
 
-@register("helloworld", "author", "一个简单的 Hello World 插件", "1.0.0", "repo url")
-class MyPlugin(Star):
+@register("autorecall", "author", "敏感词自动撤回插件", "1.0.0", "repo url")
+class AutoRecallPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
+        # 从插件配置读取敏感词列表，默认空列表
+        self.bad_words = self.context.get_config("bad_words", [])
+        logger.info(f"敏感词列表已加载: {self.bad_words}")
 
-    # 注册指令的装饰器。指令名为 helloworld。注册成功后，发送 `/helloworld` 就会触发这个指令，并回复 `你好, {user_name}!`
-    @filter.command("helloworld")
-    async def helloworld(self, event: AstrMessageEvent):
-        '''这是一个 hello world 指令''' # 这是 handler 的描述，将会被解析方便用户了解插件内容。非常建议填写。
-        user_name = event.get_sender_name()
-        message_str = event.message_str # 获取消息的纯文本内容
-        logger.info("触发hello world指令!")
-        yield event.plain_result(f"Hello, {user_name}!") # 发送一条纯文本消息
+    @filter.message()
+    async def auto_recall_bad_words(self, event: AstrMessageEvent):
+        '''检测敏感词并自动撤回消息'''
+        message_str = event.message_str.strip()
+
+        for word in self.bad_words:
+            if word in message_str:
+                logger.info(f"检测到敏感词 '{word}'，撤回用户 {event.get_sender_name()} 的消息: {message_str}")
+                yield event.recall()
+                yield event.plain_result("⚠️ 请注意文明用语。")
+                return
 
     async def terminate(self):
-        '''可选择实现 terminate 函数，当插件被卸载/停用时会调用。'''
+        logger.info("AutoRecallPlugin 插件已被卸载。")
