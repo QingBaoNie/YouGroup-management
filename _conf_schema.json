@@ -4,5 +4,16 @@
     "type": "list",
     "hint": "逐条添加敏感词",
     "default": []
+  },
+  "ban_duration": {
+    "description": "禁言时长（单位：秒）",
+    "type": "number",
+    "default": 60
+  },
+  "group_whitelist": {
+    "description": "生效群聊白名单（不设置则全部群聊生效）",
+    "type": "list",
+    "hint": "填写群号",
+    "default": []
   }
 }
