@@ -27,5 +27,29 @@
         "default": 60
       }
     }
+  },
+  "group_manage_config": {
+    "description": "群管功能配置",
+    "type": "object",
+    "items": {
+      "sub_admin_list": {
+        "description": "子管理列表",
+        "type": "list",
+        "items": {
+          "type": "int"
+        },
+        "hint": "填写子管理员的QQ号（纯数字），具有部分管理权限",
+        "default": []
+      },
+      "kick_blacklist": {
+        "description": "踢黑列表",
+        "type": "list",
+        "items": {
+          "type": "int"
+        },
+        "hint": "在此列表中的QQ号进入群后将会被自动踢出",
+        "default": []
+      }
+    }
   }
 }
