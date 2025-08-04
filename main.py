@@ -108,23 +108,17 @@ class AutoRecallKeywordPlugin(Star):
         msg = event.message_str.strip()
         group_id = event.get_group_id()
 
-        # 先尝试获取 at_list
-        at_list = getattr(event.message_obj, 'at_list', None)
+        # 遍历 message_obj.message 找到 At 类型
+        at_list = []
+        for segment in getattr(event.message_obj, 'message', []):
+            if getattr(segment, 'type', '') == 'At':
+                at_list.append(getattr(segment, 'qq', None))
+
         if not at_list:
-            at_list = getattr(event.message_obj, 'mentions', None)
+            logger.info("没有@到任何人，跳过命令处理")
+            return
 
-        # 如果有 at_list 则取第一个
-        if at_list and len(at_list) > 0:
-            target_id = str(at_list[0])
-        else:
-            # 如果没有 at_list 再从 message_str 里提取 [At:123456]
-            match = re.search(r"\[At:(\d+)\]", msg)
-            if match:
-                target_id = match.group(1)
-            else:
-                logger.info("没有@到任何人，跳过命令处理")
-                return
-
+        target_id = str(at_list[0])
         logger.info(f"检测到命令针对@{target_id}")
 
         # 后续命令处理不变
