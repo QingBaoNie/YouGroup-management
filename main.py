@@ -105,63 +105,62 @@ class AutoRecallKeywordPlugin(Star):
         await self.handle_commands(event)
 
     async def handle_commands(self, event: AstrMessageEvent):
-    msg = event.message_str.strip()
-    group_id = event.get_group_id()
+        msg = event.message_str.strip()
+        group_id = event.get_group_id()
 
-    # 直接从 message_str 提取 @对象ID
-    match = re.search(r"\[At:(\d+)\]", msg)
-    if not match:
-        logger.info("没有@到任何人，跳过命令处理")
-        return
+        # 直接从 message_str 提取 @对象ID
+        match = re.search(r"\[At:(\d+)\]", msg)
+        if not match:
+            logger.info("没有@到任何人，跳过命令处理")
+            return
 
-    target_id = match.group(1)
-    logger.info(f"检测到命令针对@{target_id}")
+        target_id = match.group(1)
+        logger.info(f"检测到命令针对@{target_id}")
 
-    if msg.startswith("禁言"):
-        duration_match = re.search(r"禁言.*?(\d+)?$", msg)
-        duration = int(duration_match.group(1)) * 60 if duration_match and duration_match.group(1) else 600
-        await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=duration)
-        await event.bot.send_group_msg(group_id, f"已禁言 {target_id} {duration//60}分钟")
+        if msg.startswith("禁言"):
+            duration_match = re.search(r"禁言.*?(\d+)?$", msg)
+            duration = int(duration_match.group(1)) * 60 if duration_match and duration_match.group(1) else 600
+            await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=duration)
+            await event.bot.send_group_msg(group_id, f"已禁言 {target_id} {duration//60}分钟")
 
-    elif msg.startswith("解禁"):
-        await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=0)
-        await event.bot.send_group_msg(group_id, f"已解除 {target_id} 禁言")
+        elif msg.startswith("解禁"):
+            await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=0)
+            await event.bot.send_group_msg(group_id, f"已解除 {target_id} 禁言")
 
-    elif msg.startswith("踢黑"):
-        self.kick_black_list.add(target_id)
-        self.save_json_data()
-        await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
-        await event.bot.send_group_msg(group_id, f"{target_id} 已加入踢黑名单并踢出")
+        elif msg.startswith("踢黑"):
+            self.kick_black_list.add(target_id)
+            self.save_json_data()
+            await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
+            await event.bot.send_group_msg(group_id, f"{target_id} 已加入踢黑名单并踢出")
 
-    elif msg.startswith("解黑"):
-        self.kick_black_list.discard(target_id)
-        self.save_json_data()
-        await event.bot.send_group_msg(group_id, f"{target_id} 已移出踢黑名单")
+        elif msg.startswith("解黑"):
+            self.kick_black_list.discard(target_id)
+            self.save_json_data()
+            await event.bot.send_group_msg(group_id, f"{target_id} 已移出踢黑名单")
 
-    elif msg.startswith("踢"):
-        await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
-        await event.bot.send_group_msg(group_id, f"已踢出 {target_id}")
+        elif msg.startswith("踢"):
+            await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
+            await event.bot.send_group_msg(group_id, f"已踢出 {target_id}")
 
-    elif msg.startswith("针对"):
-        self.target_user_list.add(target_id)
-        self.save_json_data()
-        await event.bot.send_group_msg(group_id, f"{target_id} 已加入针对名单")
+        elif msg.startswith("针对"):
+            self.target_user_list.add(target_id)
+            self.save_json_data()
+            await event.bot.send_group_msg(group_id, f"{target_id} 已加入针对名单")
 
-    elif msg.startswith("解针对"):
-        self.target_user_list.discard(target_id)
-        self.save_json_data()
-        await event.bot.send_group_msg(group_id, f"{target_id} 已移出针对名单")
+        elif msg.startswith("解针对"):
+            self.target_user_list.discard(target_id)
+            self.save_json_data()
+            await event.bot.send_group_msg(group_id, f"{target_id} 已移出针对名单")
 
-    elif msg.startswith("设置管理员"):
-        self.sub_admin_list.add(target_id)
-        self.save_json_data()
-        await event.bot.send_group_msg(group_id, f"{target_id} 已设为子管理员")
+        elif msg.startswith("设置管理员"):
+            self.sub_admin_list.add(target_id)
+            self.save_json_data()
+            await event.bot.send_group_msg(group_id, f"{target_id} 已设为子管理员")
 
-    elif msg.startswith("移除管理员"):
-        self.sub_admin_list.discard(target_id)
-        self.save_json_data()
-        await event.bot.send_group_msg(group_id, f"{target_id} 已移除子管理员")
-
+        elif msg.startswith("移除管理员"):
+            self.sub_admin_list.discard(target_id)
+            self.save_json_data()
+            await event.bot.send_group_msg(group_id, f"{target_id} 已移除子管理员")
 
     async def try_recall(self, event: AstrMessageEvent, message_id: int, group_id: int, sender_id: int):
         try:
