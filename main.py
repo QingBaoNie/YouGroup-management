@@ -6,7 +6,8 @@ from astrbot.api import logger
 class AutoRecallPlugin(Star):
     def __init__(self, context: Context, config):
         super().__init__(context)
-        self.bad_words = context.get_config().get("bad_words", [])  # 修正读取配置
+        self.config = config
+        self.bad_words = context.get_config().get("bad_words", [])  # 这里修正
         logger.info(f"敏感词列表已加载: {self.bad_words}")
 
     async def initialize(self):
@@ -14,7 +15,6 @@ class AutoRecallPlugin(Star):
 
     @filter.message()
     async def auto_recall_bad_words(self, event: AstrMessageEvent, context: Context, *args, **kwargs):
-        """监听消息，检测敏感词并撤回"""
         message_str = event.message_str.strip()
         logger.info(f"接收到消息: {message_str}")
 
