@@ -1,6 +1,7 @@
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import AstrMessageEvent
 from astrbot.core.star import filter
+from astrbot.core.star.filter.event_message_type import EventMessageType  # <<<< 加上这一行！
 from astrbot.api import logger
 
 @register("autorecall", "YourName", "敏感词自动撤回插件", "1.0.0", "https://github.com/QingBaoNie/Cesn")
@@ -17,7 +18,7 @@ class AutoRecallPlugin(Star):
     async def initialize(self):
         logger.info("AutoRecallPlugin 初始化完成。")
 
-    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    @filter.event_message_type(EventMessageType.GROUP_MESSAGE)  # <<< 这里也改成直接用 EventMessageType
     async def auto_recall_and_ban(self, event: AstrMessageEvent):
         group_id = event.get_group_id()
         sender_id = event.get_sender_id()
