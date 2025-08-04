@@ -48,18 +48,22 @@ class AutoRecallKeywordPlugin(Star):
         })
         logger.info("已同步配置到后台管理页面。")
 
-    @filter.event_message_type(EventMessageType.GROUP_MEMBER_ADD)
+    @filter.event_message_type(EventMessageType.GROUP_NOTICE)
     async def welcome_new_member(self, event: AstrMessageEvent):
-        group_id = event.get_group_id()
-        new_user_id = event.get_sender_id()
+    if event.notice_type != 'group_increase':
+        return  # 不是入群事件，忽略
 
-        at_segment = {"type": "At", "qq": str(new_user_id)}
-        text_segment = {"type": "Plain", "text": " 欢迎加入本群！大家快来打个招呼吧~"}
+    group_id = event.get_group_id()
+    new_user_id = event.get_sender_id()
 
-        await event.bot.send_group_msg(
-            group_id=int(group_id),
-            message=[at_segment, text_segment]
-        )
+    at_segment = {"type": "At", "qq": str(new_user_id)}
+    text_segment = {"type": "Plain", "text": " 欢迎加入本群！大家快来打个招呼吧~"}
+
+    await event.bot.send_group_msg(
+        group_id=int(group_id),
+        message=[at_segment, text_segment]
+    )
+
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
