@@ -5,7 +5,7 @@ from astrbot.api import logger
 
 @register("autorecall", "YourName", "敏感词自动撤回插件", "1.0.0", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallPlugin(Star):
-    def __init__(self, context: Context, **kwargs):  # **kwargs 吞掉 config
+    def __init__(self, context: Context, **kwargs):
         super().__init__(context)
         config_data = context.get_config()
         self.bad_words = config_data.get("bad_words", [])
