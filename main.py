@@ -1,13 +1,12 @@
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
-from astrbot.core import AstrBotConfig
 from astrbot.api import logger
 
 @register("autorecall", "YourName", "敏感词自动撤回插件", "1.0.0", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallPlugin(Star):
-    def __init__(self, context: Context, config: AstrBotConfig):
+    def __init__(self, context: Context, **kwargs):
         super().__init__(context)
-        self.config = config or {}
+        self.config = kwargs.get("config", {}) or {}
         self.bad_words = self.config.get("bad_words", [])
         logger.info(f"敏感词列表已加载: {self.bad_words}")
 
