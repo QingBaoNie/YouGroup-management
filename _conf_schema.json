@@ -1,19 +1,17 @@
 {
   "bad_words": {
-    "description": "敏感词列表（包含这些关键词的消息将被自动撤回）",
+    "description": "敏感词正则匹配列表",
     "type": "list",
-    "hint": "逐条添加敏感词",
-    "default": []
+    "hint": "支持正则表达式，如 '诈骗'、'红包.*链接'"
   },
   "ban_duration": {
-    "description": "禁言时长（单位：秒）",
-    "type": "number",
+    "description": "禁言时长（秒）",
+    "type": "int",
     "default": 60
   },
   "group_whitelist": {
-    "description": "生效群聊白名单（不设置则全部群聊生效）",
+    "description": "白名单群聊ID",
     "type": "list",
-    "hint": "填写群号",
-    "default": []
+    "hint": "填写需要启用本插件的群聊ID"
   }
 }
