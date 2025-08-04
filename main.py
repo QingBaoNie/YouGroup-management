@@ -15,12 +15,17 @@ class AutoRecallKeywordPlugin(Star):
         self.user_message_times = defaultdict(lambda: deque(maxlen=5))
         self.user_message_ids = defaultdict(lambda: deque(maxlen=5))
 
-    async def initialize(self):
-        config_data = self.config  # ← 读取config，不是 context.get_config()
+        async def initialize(self):
+        config_data = self.config  # ← 读取 config，不是 context.get_config()
+
+        # 读取敏感词配置
         self.bad_words = config_data.get("bad_words", [])
-        self.spam_count = config_data.get("spam_count", 5)
-        self.spam_interval = config_data.get("spam_interval", 3)
-        self.spam_ban_duration = config_data.get("spam_ban_duration", 60)
+
+        # 读取刷屏检测配置 (包裹在 spam_config 里)
+        spam_config = config_data.get("spam_config", {})
+        self.spam_count = spam_config.get("spam_count", 5)
+        self.spam_interval = spam_config.get("spam_interval", 3)
+        self.spam_ban_duration = spam_config.get("spam_ban_duration", 60)
 
         # 刷新缓存容量
         self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
@@ -28,6 +33,7 @@ class AutoRecallKeywordPlugin(Star):
 
         logger.info(f"敏感词关键词列表已加载: {self.bad_words}")
         logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s，禁言{self.spam_ban_duration}s")
+
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
