@@ -20,6 +20,7 @@ class AutoRecallKeywordPlugin(Star):
         self.spam_ban_duration = config_data.get("spam_ban_duration", 60)  # 禁言时长(秒)
 
         self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
+        self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
 
         logger.info(f"敏感词关键词列表已加载: {self.bad_words}")
         logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s，禁言{self.spam_ban_duration}s")
@@ -42,10 +43,12 @@ class AutoRecallKeywordPlugin(Star):
 
         # 刷屏检测逻辑
         now = time.time()
-        self.user_message_times[(group_id, sender_id)].append(now)
+        key = (group_id, sender_id)
+        self.user_message_times[key].append(now)
+        self.user_message_ids[key].append(message_id)
 
-        if len(self.user_message_times[(group_id, sender_id)]) == self.spam_count:
-            time_window = now - self.user_message_times[(group_id, sender_id)][0]
+        if len(self.user_message_times[key]) == self.spam_count:
+            time_window = now - self.user_message_times[key][0]
             if time_window <= self.spam_interval:
                 logger.info(f"检测到用户 {sender_id} 在群 {group_id} 刷屏，准备禁言并撤回消息")
                 # 禁言用户
@@ -59,15 +62,16 @@ class AutoRecallKeywordPlugin(Star):
                 except Exception as e:
                     logger.error(f"禁言失败: {e}")
 
-                # 撤回刷屏消息
-                for ts in self.user_message_times[(group_id, sender_id)]:
+                # 撤回刷屏消息（撤回记录的消息ID）
+                for msg_id in self.user_message_ids[key]:
                     try:
-                        await event.bot.delete_msg(message_id=int(message_id))  # 这里只示例撤回最后一条
-                        logger.info(f"已撤回消息ID {message_id}")
+                        await event.bot.delete_msg(message_id=int(msg_id))
+                        logger.info(f"已撤回刷屏消息ID {msg_id}")
                     except Exception as e:
-                        logger.error(f"撤回刷屏消息失败: {e}")
+                        logger.error(f"撤回刷屏消息ID {msg_id} 失败: {e}")
                 # 清空记录
-                self.user_message_times[(group_id, sender_id)].clear()
+                self.user_message_times[key].clear()
+                self.user_message_ids[key].clear()
 
     async def try_recall(self, event: AstrMessageEvent, message_id: int, group_id: int, sender_id: int):
         try:
