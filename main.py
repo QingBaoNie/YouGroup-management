@@ -9,8 +9,8 @@ class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        config_data = context.get_config()
-        self.bad_words = config_data.get("bad_words", [])
+        # ⚠️ 从self.config读取
+        self.bad_words = self.config.get("bad_words", [])
         logger.info(f"敏感词关键词列表已加载: {self.bad_words}")
 
     async def initialize(self):
