@@ -2,12 +2,14 @@ from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from astrbot.core.star.filter.event_message_type import EventMessageType
+from astrbot.core import AstrBotConfig
 
-@register("autorecall", "YourName", "敏感词自动撤回插件(关键词匹配)", "1.0.4", "https://github.com/QingBaoNie/Cesn")
+@register("autorecall", "Qing", "敏感词自动撤回插件(关键词匹配)", "1.0.4", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
-        config_data = context.config  # <<<<<<<< 关键点
+        self.config = config
+        config_data = context.get_config()
         self.bad_words = config_data.get("bad_words", [])
         logger.info(f"敏感词关键词列表已加载: {self.bad_words}")
 
@@ -24,7 +26,6 @@ class AutoRecallKeywordPlugin(Star):
         logger.info(f"收到消息: [{group_id}] {sender_id}: {message_str}")
         logger.info(f"消息ID: {message_id}")
 
-        # 逐个关键词模糊匹配
         for word in self.bad_words:
             if word in message_str:
                 logger.info(f"检测到敏感词 '{word}'，准备撤回消息 {message_id}")
@@ -33,7 +34,7 @@ class AutoRecallKeywordPlugin(Star):
                     logger.info(f"撤回API返回: {result}")
                 except Exception as e:
                     logger.error(f"撤回消息失败: {e}")
-                return  # 命中关键词后只撤回一次，退出循环
+                return  # 命中关键词后立即返回
 
     async def terminate(self):
         logger.info("AutoRecallKeywordPlugin 插件已被卸载。")
