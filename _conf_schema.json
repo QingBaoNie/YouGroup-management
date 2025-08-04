@@ -1,17 +1,7 @@
 {
   "bad_words": {
-    "description": "敏感词正则匹配列表",
+    "description": "敏感词关键词列表（模糊匹配）",
     "type": "list",
-    "hint": "支持正则表达式，如 '诈骗'、'红包.*链接'"
-  },
-  "ban_duration": {
-    "description": "禁言时长（秒）",
-    "type": "int",
-    "default": 60
-  },
-  "group_whitelist": {
-    "description": "白名单群聊ID",
-    "type": "list",
-    "hint": "填写需要启用本插件的群聊ID"
+    "hint": "填写需要撤回的关键词，如 '诈骗'、'红包链接'"
   }
 }
