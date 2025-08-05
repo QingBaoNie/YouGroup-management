@@ -90,7 +90,7 @@ class AutoRecallKeywordPlugin(Star):
             await self.try_recall(event, message_id, group_id, sender_id)
             logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
             return
-
+        """开启"""
         if self.recall_cards:
             for segment in getattr(event.message_obj, 'message', []):
                 if segment.type in ['Share', 'Card', 'Contact', 'Json', 'Xml']:
