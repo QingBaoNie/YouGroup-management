@@ -7,7 +7,7 @@ from collections import defaultdict, deque
 import json
 import re
 
-@register("cesn", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.5", "https://github.com/QingBaoNie/Cesn")
+@register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.5", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config):
         super().__init__(context)
@@ -58,7 +58,6 @@ class AutoRecallKeywordPlugin(Star):
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
         if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
-            logger.info("检测到系统通知消息，跳过处理")
             return
 
         message_str = event.message_str.strip()
@@ -151,7 +150,7 @@ class AutoRecallKeywordPlugin(Star):
                 at_list.append(getattr(segment, 'qq', None))
 
         if not at_list:
-            logger.info("没有@到任何人，跳过命令处理")
+            
             return
 
         target_id = str(at_list[0])
