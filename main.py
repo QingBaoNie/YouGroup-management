@@ -55,90 +55,88 @@ class AutoRecallKeywordPlugin(Star):
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info("已保存数据到 cesn_data.json")
 
-    @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
-    async def auto_recall(self, event: AstrMessageEvent):
-        logger.info(f"收到 message_obj: {event.message_obj}")
+@filter.event_message_type(EventMessageType.GROUP_MESSAGE)
+async def auto_recall(self, event: AstrMessageEvent):
+    logger.info(f"收到 message_obj: {event.message_obj}")
 
-        if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
-            logger.info("检测到系统通知消息，跳过处理")
+    if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
+        logger.info("检测到系统通知消息，跳过处理")
+        return
+
+    message_str = event.message_str.strip()
+    message_id = event.message_obj.message_id
+    group_id = event.get_group_id()
+    sender_id = event.get_sender_id()
+
+    if message_str.startswith("撤回"):
+        logger.info("检测到撤回命令，跳过刷屏检测")
+        await self.handle_commands(event)
+        return
+
+    if str(sender_id) in self.kick_black_list:
+        await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
+        await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
+        return
+
+    if str(sender_id) in self.target_user_list:
+        await event.bot.delete_msg(message_id=message_id)
+        logger.info(f"静默撤回 {sender_id} 的消息")
+        return
+
+    for word in self.bad_words:
+        if word in message_str:
+            await self.try_recall(event, message_id, group_id, sender_id)
             return
 
-        message_str = event.message_str.strip()
-        message_id = event.message_obj.message_id
-        group_id = event.get_group_id()
-        sender_id = event.get_sender_id()
+    # 链接撤回
+    if self.recall_links and ("http://" in message_str or "https://" in message_str):
+        await self.try_recall(event, message_id, group_id, sender_id)
+        logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
+        return
 
-        if message_str.startswith("撤回"):
-            logger.info("检测到撤回命令，跳过刷屏检测")
-            await self.handle_commands(event)
-            return
-
-        if str(sender_id) in self.kick_black_list:
-            await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
-            return
-
-        if str(sender_id) in self.target_user_list:
-            await event.bot.delete_msg(message_id=message_id)
-            logger.info(f"静默撤回 {sender_id} 的消息")
-            return
-
-        for word in self.bad_words:
-            if word in message_str:
+    # 卡片消息撤回
+    if self.recall_cards:
+        for segment in getattr(event.message_obj, 'message', []):
+            if segment.type in ['Share', 'Card', 'Contact', 'Json', 'Xml']:
                 await self.try_recall(event, message_id, group_id, sender_id)
+                logger.info(f"检测到卡片消息，已撤回 {sender_id} 的消息")
                 return
 
-        # 链接撤回
-        if self.config["admin_config"].get("recall_links", False):
-            if "http://" in message_str or "https://" in message_str:
-                await self.try_recall(event, message_id, group_id, sender_id)
-                logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
-                return
+    # 号码撤回（手机号、QQ号、微信号）
+    if self.recall_numbers:
+        for segment in getattr(event.message_obj, 'message', []):
+            if segment.type == 'Text':
+                text_content = segment.data.get('text', '')
 
-        # 卡片消息撤回
-        if self.config["admin_config"].get("recall_cards", False):
-            for segment in getattr(event.message_obj, 'message', []):
-                if segment.type in ['Share', 'Card', 'Contact', 'Json', 'Xml']:
+                # 手机号匹配
+                phone_match = re.search(r"(?:\+?86)?1[3-9]\d{9}", text_content)
+
+                # QQ号匹配
+                qq_match = re.search(r"(?<!\d)([1-9]\d{4,10})(?!\d)", text_content)
+
+                # 微信号匹配
+                wechat_match = re.search(r"[a-zA-Z][-_a-zA-Z0-9]{5,19}", text_content)
+
+                if phone_match or qq_match or wechat_match:
                     await self.try_recall(event, message_id, group_id, sender_id)
-                    logger.info(f"检测到卡片消息({segment.type})，已撤回 {sender_id} 的消息")
+                    logger.info(f"检测到号码信息（手机号/微信号/QQ号），已撤回 {sender_id} 的消息")
                     return
 
-        # 号码撤回（手机号、QQ号、微信号）
-        if self.config["admin_config"].get("recall_numbers", False):
-            for segment in getattr(event.message_obj, 'message', []):
-                if segment.type == 'Text':
-                    text_content = segment.data.get('text', '')
+    # 刷屏检测逻辑
+    now = time.time()
+    key = (group_id, sender_id)
+    self.user_message_times[key].append(now)
+    self.user_message_ids[key].append(message_id)
 
-                    # 手机号匹配
-                    phone_match = re.search(r"(?:\+?86)?1[3-9]\d{9}", text_content)
+    if len(self.user_message_times[key]) == self.spam_count:
+        if now - self.user_message_times[key][0] <= self.spam_interval:
+            await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
+            for msg_id in self.user_message_ids[key]:
+                await event.bot.delete_msg(message_id=msg_id)
+            self.user_message_times[key].clear()
+            self.user_message_ids[key].clear()
 
-                    # QQ号匹配
-                    qq_match = re.search(r"(?<!\d)([1-9]\d{4,10})(?!\d)", text_content)
-
-                    # 微信号匹配
-                    wechat_match = re.search(r"[a-zA-Z][-_a-zA-Z0-9]{5,19}", text_content)
-
-                    if phone_match or qq_match or wechat_match:
-                        await self.try_recall(event, message_id, group_id, sender_id)
-                        logger.info(f"检测到号码信息（手机号/微信号/QQ号），已撤回 {sender_id} 的消息")
-                        return
-
-        # 刷屏检测逻辑
-        now = time.time()
-        key = (group_id, sender_id)
-        self.user_message_times[key].append(now)
-        self.user_message_ids[key].append(message_id)
-
-        if len(self.user_message_times[key]) == self.spam_count:
-            if now - self.user_message_times[key][0] <= self.spam_interval:
-                await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
-                for msg_id in self.user_message_ids[key]:
-                    await event.bot.delete_msg(message_id=msg_id)
-                self.user_message_times[key].clear()
-                self.user_message_ids[key].clear()
-
-        await self.handle_commands(event)
-
+    await self.handle_commands(event)
 
     @filter.event_message_type(EventMessageType.ALL)
     async def handle_group_increase(self, event: AstrMessageEvent):
