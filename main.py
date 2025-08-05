@@ -57,7 +57,7 @@ class AutoRecallKeywordPlugin(Star):
 
 @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
 async def auto_recall(self, event: AstrMessageEvent):
-    logger.info(f"收到 message_obj: {event.message_obj}")
+    
 
     if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
         logger.info("检测到系统通知消息，跳过处理")
