@@ -60,6 +60,12 @@ class AutoRecallKeywordPlugin(Star):
         group_id = event.get_group_id()
         sender_id = event.get_sender_id()
 
+        # 撤回命令不参与刷屏检测
+        if message_str.startswith("撤回"):
+            logger.info("检测到撤回命令，跳过刷屏检测")
+            await self.handle_commands(event)
+            return
+
         if str(sender_id) in self.kick_black_list:
             await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
             await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
@@ -149,6 +155,7 @@ class AutoRecallKeywordPlugin(Star):
         elif msg.startswith("踢"):
             await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已踢出 {target_id}")
+
         elif msg.startswith("针对"):
             self.target_user_list.add(target_id)
             self.save_json_data()
@@ -187,7 +194,6 @@ class AutoRecallKeywordPlugin(Star):
 
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 的 {deleted} 条消息")
 
-        
     async def try_recall(self, event: AstrMessageEvent, message_id: int, group_id: int, sender_id: int):
         try:
             await event.bot.delete_msg(message_id=int(message_id))
