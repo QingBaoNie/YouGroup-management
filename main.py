@@ -5,7 +5,6 @@ from astrbot.core.star.filter.event_message_type import EventMessageType
 import time
 from collections import defaultdict, deque
 import json
-import os
 import re
 
 @register("cesn", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.3", "https://github.com/QingBaoNie/Cesn")
@@ -29,12 +28,10 @@ class AutoRecallKeywordPlugin(Star):
         self.spam_interval = spam_config.get("spam_interval", 3)
         self.spam_ban_duration = spam_config.get("spam_ban_duration", 60)
 
-        # 实时刷新配置数据（优先配置）
         self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
         self.kick_black_list = set(admin_config.get("kick_black_list", []))
         self.target_user_list = set(admin_config.get("target_user_list", []))
 
-        # 同步保存到 JSON 文件（仅做持久化）
         self.save_json_data()
 
         self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
@@ -92,6 +89,22 @@ class AutoRecallKeywordPlugin(Star):
 
         await self.handle_commands(event)
 
+    @filter.event()
+    async def handle_group_increase(self, event: AstrMessageEvent):
+        if event.message_obj.notice_type != 'group_increase':
+            return
+
+        group_id = event.get_group_id()
+        user_id = event.message_obj.user_id
+
+        if str(user_id) in self.kick_black_list:
+            try:
+                await event.bot.set_group_kick(group_id=int(group_id), user_id=int(user_id))
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {user_id}，已踢出并处理！")
+                logger.info(f"黑名单用户 {user_id} 加群已自动踢出")
+            except Exception as e:
+                logger.error(f"踢出黑名单用户 {user_id} 失败: {e}")
+
     async def handle_commands(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
         group_id = event.get_group_id()
@@ -119,10 +132,19 @@ class AutoRecallKeywordPlugin(Star):
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已解除 {target_id} 禁言")
 
         elif msg.startswith("踢黑"):
-            self.kick_black_list.add(target_id)
-            self.save_json_data()
-            await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入踢黑名单并踢出")
+            try:
+                self.kick_black_list.add(target_id)
+                self.save_json_data()
+                await event.bot.set_group_kick(
+                    group_id=int(group_id),
+                    user_id=int(target_id),
+                    reject_add_request=True
+                )
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入踢黑名单并踢出")
+                logger.info(f"{target_id} 已加入踢黑名单并踢出")
+            except Exception as e:
+                logger.error(f"踢黑 {target_id} 失败: {e}")
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"尝试踢出 {target_id} 时失败: {e}")
 
         elif msg.startswith("解黑"):
             self.kick_black_list.discard(target_id)
