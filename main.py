@@ -149,7 +149,6 @@ class AutoRecallKeywordPlugin(Star):
         elif msg.startswith("踢"):
             await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已踢出 {target_id}")
-
         elif msg.startswith("针对"):
             self.target_user_list.add(target_id)
             self.save_json_data()
@@ -169,6 +168,7 @@ class AutoRecallKeywordPlugin(Star):
             self.sub_admin_list.discard(target_id)
             self.save_json_data()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移除子管理员")
+
         elif msg.startswith("撤回"):
             count_match = re.search(r"撤回.*?(\d+)?$", msg)
             recall_count = int(count_match.group(1)) if count_match and count_match.group(1) else 5
@@ -186,6 +186,7 @@ class AutoRecallKeywordPlugin(Star):
                         logger.error(f"撤回 {target_id} 消息 {msg_data['message_id']} 失败: {e}")
 
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 的 {deleted} 条消息")
+
         
     async def try_recall(self, event: AstrMessageEvent, message_id: int, group_id: int, sender_id: int):
         try:
