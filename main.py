@@ -150,7 +150,7 @@ class AutoRecallKeywordPlugin(Star):
                 at_list.append(getattr(segment, 'qq', None))
 
         if not at_list:
-            
+            logger.error(f"")
             return
 
         target_id = str(at_list[0])
