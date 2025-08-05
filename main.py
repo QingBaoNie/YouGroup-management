@@ -72,7 +72,7 @@ class AutoRecallKeywordPlugin(Star):
             return
 
         if str(sender_id) in self.target_user_list:
-            await event.bot.delete_msg(message_id=int(message_id))
+            await event.bot.delete_msg(message_id=message_id)
             logger.info(f"静默撤回 {sender_id} 的消息")
             return
 
@@ -90,7 +90,7 @@ class AutoRecallKeywordPlugin(Star):
             if now - self.user_message_times[key][0] <= self.spam_interval:
                 await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
                 for msg_id in self.user_message_ids[key]:
-                    await event.bot.delete_msg(message_id=int(msg_id))
+                    await event.bot.delete_msg(message_id=msg_id)
                 self.user_message_times[key].clear()
                 self.user_message_ids[key].clear()
 
@@ -187,16 +187,16 @@ class AutoRecallKeywordPlugin(Star):
                     break
                 if str(msg_data.get('sender', {}).get('user_id')) == target_id:
                     try:
-                        await event.bot.delete_msg(message_id=int(msg_data['message_id']))
+                        await event.bot.delete_msg(message_id=msg_data['message_id'])
                         deleted += 1
                     except Exception as e:
                         logger.error(f"撤回 {target_id} 消息 {msg_data['message_id']} 失败: {e}")
 
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 的 {deleted} 条消息")
 
-    async def try_recall(self, event: AstrMessageEvent, message_id: int, group_id: int, sender_id: int):
+    async def try_recall(self, event: AstrMessageEvent, message_id: str, group_id: int, sender_id: int):
         try:
-            await event.bot.delete_msg(message_id=int(message_id))
+            await event.bot.delete_msg(message_id=message_id)
         except Exception as e:
             try:
                 member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
