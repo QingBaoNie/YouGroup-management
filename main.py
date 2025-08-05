@@ -8,7 +8,7 @@ import json
 import os
 import re
 
-@register("cesn", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.4", "https://github.com/QingBaoNie/Cesn")
+@register("cesn", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.5", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config):
         super().__init__(context)
@@ -55,6 +55,12 @@ class AutoRecallKeywordPlugin(Star):
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
         logger.info(f"收到 message_obj: {event.message_obj}")
+
+        # 跳过系统通知消息（撤回通知、禁言通知等）
+        if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
+            logger.info("检测到系统通知消息，跳过处理")
+            return
+
         message_str = event.message_str.strip()
         message_id = event.message_obj.message_id
         group_id = event.get_group_id()
@@ -81,6 +87,7 @@ class AutoRecallKeywordPlugin(Star):
                 await self.try_recall(event, message_id, group_id, sender_id)
                 return
 
+        # 刷屏检测逻辑
         now = time.time()
         key = (group_id, sender_id)
         self.user_message_times[key].append(now)
