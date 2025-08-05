@@ -88,25 +88,42 @@ class AutoRecallKeywordPlugin(Star):
                 await self.try_recall(event, message_id, group_id, sender_id)
                 return
 
-        if self.recall_links and ("http://" in message_str or "https://" in message_str):
-            await self.try_recall(event, message_id, group_id, sender_id)
-            logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
-            return
-
-        if self.recall_cards:
-            for segment in getattr(event.message_obj, 'message', []):
-                if segment.type in ['Share', 'Card', 'Contact']:
-                    await self.try_recall(event, message_id, group_id, sender_id)
-                    logger.info(f"检测到卡片消息，已撤回 {sender_id} 的消息")
-                    return
-
-        if self.recall_numbers:
-            number_pattern = re.compile(r"(?:\+?86)?1[3-9]\d{9}")
-            if number_pattern.search(message_str):
+        # 链接撤回
+        if self.config["admin_config"].get("recall_links", False):
+            if "http://" in message_str or "https://" in message_str:
                 await self.try_recall(event, message_id, group_id, sender_id)
-                logger.info(f"检测到号码信息，已撤回 {sender_id} 的消息")
+                logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
                 return
 
+        # 卡片消息撤回
+        if self.config["admin_config"].get("recall_cards", False):
+            for segment in getattr(event.message_obj, 'message', []):
+                if segment.type in ['Share', 'Card', 'Contact', 'Json', 'Xml']:
+                    await self.try_recall(event, message_id, group_id, sender_id)
+                    logger.info(f"检测到卡片消息({segment.type})，已撤回 {sender_id} 的消息")
+                    return
+
+        # 号码撤回（手机号、QQ号、微信号）
+        if self.config["admin_config"].get("recall_numbers", False):
+            for segment in getattr(event.message_obj, 'message', []):
+                if segment.type == 'Text':
+                    text_content = segment.data.get('text', '')
+
+                    # 手机号匹配
+                    phone_match = re.search(r"(?:\+?86)?1[3-9]\d{9}", text_content)
+
+                    # QQ号匹配
+                    qq_match = re.search(r"(?<!\d)([1-9]\d{4,10})(?!\d)", text_content)
+
+                    # 微信号匹配
+                    wechat_match = re.search(r"[a-zA-Z][-_a-zA-Z0-9]{5,19}", text_content)
+
+                    if phone_match or qq_match or wechat_match:
+                        await self.try_recall(event, message_id, group_id, sender_id)
+                        logger.info(f"检测到号码信息（手机号/微信号/QQ号），已撤回 {sender_id} 的消息")
+                        return
+
+        # 刷屏检测逻辑
         now = time.time()
         key = (group_id, sender_id)
         self.user_message_times[key].append(now)
@@ -121,6 +138,7 @@ class AutoRecallKeywordPlugin(Star):
                 self.user_message_ids[key].clear()
 
         await self.handle_commands(event)
+
 
     @filter.event_message_type(EventMessageType.ALL)
     async def handle_group_increase(self, event: AstrMessageEvent):
