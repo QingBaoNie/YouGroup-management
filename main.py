@@ -169,7 +169,24 @@ class AutoRecallKeywordPlugin(Star):
             self.sub_admin_list.discard(target_id)
             self.save_json_data()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移除子管理员")
+        elif msg.startswith("撤回"):
+            count_match = re.search(r"撤回.*?(\d+)?$", msg)
+            recall_count = int(count_match.group(1)) if count_match and count_match.group(1) else 5
 
+            history = await event.bot.get_group_msg_history(group_id=int(group_id), count=100)
+            deleted = 0
+            for msg_data in reversed(history.get('messages', [])):
+                if deleted >= recall_count:
+                    break
+                if str(msg_data.get('sender', {}).get('user_id')) == target_id:
+                    try:
+                        await event.bot.delete_msg(message_id=int(msg_data['message_id']))
+                        deleted += 1
+                    except Exception as e:
+                        logger.error(f"撤回 {target_id} 消息 {msg_data['message_id']} 失败: {e}")
+
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 的 {deleted} 条消息")
+        
     async def try_recall(self, event: AstrMessageEvent, message_id: int, group_id: int, sender_id: int):
         try:
             await event.bot.delete_msg(message_id=int(message_id))
