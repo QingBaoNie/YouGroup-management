@@ -1,4 +1,4 @@
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import filter, event, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from astrbot.core.star.filter.event_message_type import EventMessageType
@@ -90,7 +90,7 @@ class AutoRecallKeywordPlugin(Star):
 
         await self.handle_commands(event)
 
-    @filter.event()
+    @event
     async def handle_group_increase(self, event: AstrMessageEvent):
         if getattr(event.message_obj, 'notice_type', None) != 'group_increase':
             return
