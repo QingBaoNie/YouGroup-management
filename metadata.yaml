@@ -1,4 +1,4 @@
-name: Ad killer  
+name: susceptible
 version: 1.1.5
 author: Qing
 description: 敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)
