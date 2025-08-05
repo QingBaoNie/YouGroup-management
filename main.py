@@ -89,11 +89,8 @@ class AutoRecallKeywordPlugin(Star):
 
         await self.handle_commands(event)
 
-    @filter.event()
+    @filter.event_message_type(EventMessageType.GROUP_INCREASE)
     async def handle_group_increase(self, event: AstrMessageEvent):
-        if event.message_obj.notice_type != 'group_increase':
-            return
-
         group_id = event.get_group_id()
         user_id = event.message_obj.user_id
 
