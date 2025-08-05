@@ -90,7 +90,7 @@ class AutoRecallKeywordPlugin(Star):
             await self.try_recall(event, message_id, group_id, sender_id)
             logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
             return
-
+        """开启"""
         if self.recall_cards:
             for segment in getattr(event.message_obj, 'message', []):
                 if segment.type in ['Share', 'Card', 'Contact', 'Json', 'Xml']:
@@ -126,6 +126,21 @@ class AutoRecallKeywordPlugin(Star):
 
         await self.handle_commands(event)
 
+    @filter.event_message_type(EventMessageType.ALL)
+    async def handle_group_increase(self, event: AstrMessageEvent):
+        if getattr(event.message_obj, 'notice_type', None) != 'group_increase':
+            return
+
+        group_id = event.get_group_id()
+        user_id = event.message_obj.user_id
+
+        if str(user_id) in self.kick_black_list:
+            try:
+                await event.bot.set_group_kick(group_id=int(group_id), user_id=int(user_id))
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {user_id}，已踢出并处理！")
+            except Exception as e:
+                logger.error(f"踢出黑名单用户 {user_id} 失败: {e}")
+
     async def handle_commands(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
         group_id = event.get_group_id()
@@ -142,21 +157,17 @@ class AutoRecallKeywordPlugin(Star):
         target_id = str(at_list[0])
         logger.info(f"检测到命令针对@{target_id}")
 
-        # 行为日志标记示例：event.mark_action("敏感词插件 - 禁言")
         if msg.startswith("禁言"):
-            event.mark_action("敏感词插件 - 禁言")
             duration_match = re.search(r"禁言.*?(\d+)?$", msg)
             duration = int(duration_match.group(1)) * 60 if duration_match and duration_match.group(1) else 600
             await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=duration)
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已禁言 {target_id} {duration//60}分钟")
 
         elif msg.startswith("解禁") or msg.startswith("解言"):
-            event.mark_action("敏感词插件 - 解禁")
             await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=0)
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已解除 {target_id} 禁言")
 
         elif msg.startswith("踢黑"):
-            event.mark_action("敏感词插件 - 踢黑")
             try:
                 self.kick_black_list.add(target_id)
                 self.save_json_data()
@@ -167,42 +178,35 @@ class AutoRecallKeywordPlugin(Star):
                 await event.bot.send_group_msg(group_id=int(group_id), message=f"踢出 {target_id} 失败: {e}")
 
         elif msg.startswith("解黑"):
-            event.mark_action("敏感词插件 - 解黑")
             self.kick_black_list.discard(target_id)
             self.save_json_data()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移出踢黑名单")
 
         elif msg.startswith("踢"):
-            event.mark_action("敏感词插件 - 踢人")
             await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已踢出 {target_id}")
 
         elif msg.startswith("针对"):
-            event.mark_action("敏感词插件 - 针对")
             self.target_user_list.add(target_id)
             self.save_json_data()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入针对名单")
 
         elif msg.startswith("解针对"):
-            event.mark_action("敏感词插件 - 解针对")
             self.target_user_list.discard(target_id)
             self.save_json_data()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移出针对名单")
 
         elif msg.startswith("设置管理员"):
-            event.mark_action("敏感词插件 - 设置管理员")
             self.sub_admin_list.add(target_id)
             self.save_json_data()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已设为子管理员")
 
         elif msg.startswith("移除管理员"):
-            event.mark_action("敏感词插件 - 移除管理员")
             self.sub_admin_list.discard(target_id)
             self.save_json_data()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移除子管理员")
 
         elif msg.startswith("撤回"):
-            event.mark_action("敏感词插件 - 撤回")
             count_match = re.search(r"撤回.*?(\d+)?$", msg)
             recall_count = int(count_match.group(1)) if count_match and count_match.group(1) else 5
 
