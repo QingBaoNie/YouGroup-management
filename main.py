@@ -126,20 +126,32 @@ class AutoRecallKeywordPlugin(Star):
 
         await self.handle_commands(event)
 
-    @filter.event_message_type(EventMessageType.ALL)
-    async def handle_group_increase(self, event: AstrMessageEvent):
-        if getattr(event.message_obj, 'notice_type', None) != 'group_increase':
-            return
+@filter.event_message_type(EventMessageType.ALL)
+async def handle_group_increase(self, event: AstrMessageEvent):
+    if getattr(event.message_obj, 'notice_type', None) != 'group_increase':
+        return
 
-        group_id = event.get_group_id()
-        user_id = event.message_obj.user_id
+    group_id = event.get_group_id()
+    user_id = event.message_obj.user_id
 
-        if str(user_id) in self.kick_black_list:
-            try:
-                await event.bot.set_group_kick(group_id=int(group_id), user_id=int(user_id))
-                await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {user_id}，已踢出并处理！")
-            except Exception as e:
-                logger.error(f"踢出黑名单用户 {user_id} 失败: {e}")
+    if str(user_id) in self.kick_black_list:
+        try:
+            await event.bot.set_group_kick(group_id=int(group_id), user_id=int(user_id))
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {user_id}，已踢出并处理！")
+        except Exception as e:
+            logger.error(f"踢出黑名单用户 {user_id} 失败: {e}")
+        return  # 黑名单踢出后结束处理
+
+    # 欢迎新成员
+    welcome_message = [
+        {"type": "At", "data": {"qq": str(user_id)}},
+        {"type": "Text", "data": {"text": " 欢迎加入本群！请友善活跃聊天，文明发言哦~"}}
+    ]
+    try:
+        await event.bot.send_group_msg(group_id=int(group_id), message=welcome_message)
+    except Exception as e:
+        logger.error(f"发送欢迎消息失败: {e}")
+
 
     async def handle_commands(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
