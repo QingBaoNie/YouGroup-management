@@ -1,7 +1,7 @@
 from astrbot.core.star import filter
 from astrbot.api import logger
-from astrbot.api.star import Context, Star, register
-from astrbot.model import AstrMessageEvent, EventMessageType
+from astrbot.core.star import Context, Star, register
+from astrbot.core.model import AstrMessageEvent, EventMessageType
 
 import time
 from collections import defaultdict, deque
