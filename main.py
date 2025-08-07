@@ -1,13 +1,13 @@
 from astrbot import logger
 from astrbot.api.star import Context, Star, register
-from astrbot.core.star import filter
-from astrbot.core.star.filter.event_message_type import EventMessageType
+from astrbot.core.star.filter.event_message_type import event_message_type, EventMessageType
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 
 import time
 from collections import defaultdict, deque
 import json
 import re
+
 @register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.5", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config):
@@ -56,8 +56,8 @@ class AutoRecallKeywordPlugin(Star):
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info("已保存数据到 cesn_data.json")
 
-    @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
-    async def auto_recall(self, event: AstrMessageEvent):
+    @event_message_type(EventMessageType.GROUP_MESSAGE)
+    async def auto_recall(self, event: AiocqhttpMessageEvent):
         if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
             return
 
@@ -90,7 +90,7 @@ class AutoRecallKeywordPlugin(Star):
             await self.try_recall(event, message_id, group_id, sender_id)
             logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
             return
-        """开启"""
+
         if self.recall_cards:
             for segment in getattr(event.message_obj, 'message', []):
                 if segment.type in ['Share', 'Card', 'Contact', 'Json', 'Xml']:
@@ -102,13 +102,10 @@ class AutoRecallKeywordPlugin(Star):
             for segment in getattr(event.message_obj, 'message', []):
                 if segment.type == 'Text':
                     text_content = segment.data.get('text', '')
-
-                    # 匹配连续6位以上的纯数字段
                     if re.search(r"\d{6,}", text_content):
                         await self.try_recall(event, message_id, group_id, sender_id)
-                        logger.info(f"检测到连续数字（疑似群号/QQ号/手机号），已撤回 {sender_id} 的消息：{text_content}")
+                        logger.info(f"检测到连续数字，已撤回 {sender_id} 的消息: {text_content}")
                         return
-
 
         now = time.time()
         key = (group_id, sender_id)
@@ -125,8 +122,8 @@ class AutoRecallKeywordPlugin(Star):
 
         await self.handle_commands(event)
 
-    @filter.event_message_type(EventMessageType.ALL)
-    async def handle_group_increase(self, event: AstrMessageEvent):
+    @event_message_type(EventMessageType.ALL)
+    async def handle_group_increase(self, event: AiocqhttpMessageEvent):
         if getattr(event.message_obj, 'notice_type', None) != 'group_increase':
             return
 
@@ -140,7 +137,7 @@ class AutoRecallKeywordPlugin(Star):
             except Exception as e:
                 logger.error(f"踢出黑名单用户 {user_id} 失败: {e}")
 
-    async def handle_commands(self, event: AstrMessageEvent):
+    async def handle_commands(self, event: AiocqhttpMessageEvent):
         msg = event.message_str.strip()
         group_id = event.get_group_id()
 
@@ -174,7 +171,6 @@ class AutoRecallKeywordPlugin(Star):
                 await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入踢黑名单并踢出")
             except Exception as e:
                 logger.error(f"踢黑 {target_id} 失败: {e}")
-                await event.bot.send_group_msg(group_id=int(group_id), message=f"踢出 {target_id} 失败: {e}")
 
         elif msg.startswith("解黑"):
             self.kick_black_list.discard(target_id)
@@ -223,8 +219,7 @@ class AutoRecallKeywordPlugin(Star):
 
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 的 {deleted} 条消息")
 
-
-    async def try_recall(self, event: AstrMessageEvent, message_id: str, group_id: int, sender_id: int):
+    async def try_recall(self, event: AiocqhttpMessageEvent, message_id: str, group_id: int, sender_id: int):
         try:
             await event.bot.delete_msg(message_id=message_id)
         except Exception as e:
