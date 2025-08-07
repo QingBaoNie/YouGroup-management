@@ -103,12 +103,12 @@ class AutoRecallKeywordPlugin(Star):
                     return
 
         if self.recall_numbers:
-            # 调试日志：确认进入数字检测
-            logger.debug(f"[recall_numbers] 进入数字检测，message_str={message_str!r}")
+            # 调试：确认走到数字检测分支
+            logger.debug(f"[recall_numbers] 检测分支触发，message_str={message_str!r}")
 
+            # 按任意连续 6 位及以上数字匹配
             match = re.search(r"\d{6,}", message_str)
             if match:
-                # 调试日志：打印匹配到的数字
                 logger.debug(f"[recall_numbers] 正则匹配成功，匹配内容={match.group(0)}")
                 await self.try_recall(event, message_id, group_id, sender_id)
                 logger.info(f"检测到连续数字，已撤回 {sender_id} 的消息: {message_str}")
@@ -116,6 +116,7 @@ class AutoRecallKeywordPlugin(Star):
             else:
                 logger.debug("[recall_numbers] 正则未匹配，继续后续逻辑")
 
+        # —— 刷屏检测逻辑 —— #
         now = time.time()
         key = (group_id, sender_id)
         self.user_message_times[key].append(now)
@@ -134,9 +135,7 @@ class AutoRecallKeywordPlugin(Star):
                 self.user_message_ids[key].clear()
 
         await self.handle_commands(event)
-
-
-    @filter.event_message_type(EventMessageType.ALL)
+  @filter.event_message_type(EventMessageType.ALL)
     async def handle_group_increase(self, event: AstrMessageEvent):
         if getattr(event.message_obj, 'notice_type', None) != 'group_increase':
             return
