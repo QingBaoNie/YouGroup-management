@@ -8,6 +8,7 @@ import time
 from collections import defaultdict, deque
 import json
 import re
+
 @register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.5", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config):
@@ -56,8 +57,8 @@ class AutoRecallKeywordPlugin(Star):
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info("已保存数据到 cesn_data.json")
 
-    @event_message_type(EventMessageType.GROUP_MESSAGE)
-    async def auto_recall(self, event: AiocqhttpMessageEvent):
+    @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
+    async def auto_recall(self, event: AstrMessageEvent):
         if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
             return
 
@@ -122,8 +123,8 @@ class AutoRecallKeywordPlugin(Star):
 
         await self.handle_commands(event)
 
-    @event_message_type(EventMessageType.ALL)
-    async def handle_group_increase(self, event: AiocqhttpMessageEvent):
+    @filter.event_message_type(EventMessageType.ALL)
+    async def handle_group_increase(self, event: AstrMessageEvent):
         if getattr(event.message_obj, 'notice_type', None) != 'group_increase':
             return
 
@@ -137,7 +138,7 @@ class AutoRecallKeywordPlugin(Star):
             except Exception as e:
                 logger.error(f"踢出黑名单用户 {user_id} 失败: {e}")
 
-    async def handle_commands(self, event: AiocqhttpMessageEvent):
+    async def handle_commands(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
         group_id = event.get_group_id()
 
@@ -219,7 +220,7 @@ class AutoRecallKeywordPlugin(Star):
 
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 的 {deleted} 条消息")
 
-    async def try_recall(self, event: AiocqhttpMessageEvent, message_id: str, group_id: int, sender_id: int):
+    async def try_recall(self, event: AstrMessageEvent, message_id: str, group_id: int, sender_id: int):
         try:
             await event.bot.delete_msg(message_id=message_id)
         except Exception as e:
