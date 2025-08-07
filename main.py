@@ -1,13 +1,13 @@
 from astrbot import logger
 from astrbot.api.star import Context, Star, register
-from astrbot.core.star.filter.event_message_type import event_message_type, EventMessageType
-from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+from astrbot.core.star import filter
+from astrbot.core.star.filter.event_message_type import EventMessageType
+from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
 
 import time
 from collections import defaultdict, deque
 import json
 import re
-
 @register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.5", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config):
