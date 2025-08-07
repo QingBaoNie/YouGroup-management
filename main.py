@@ -1,11 +1,12 @@
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api import filter, logger
 from astrbot.api.star import Context, Star, register
-from astrbot.api import logger
-from astrbot.core.star.filter.event_message_type import EventMessageType
+from astrbot.model import AstrMessageEvent, EventMessageType
+
 import time
 from collections import defaultdict, deque
 import json
 import re
+
 
 @register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.5", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
