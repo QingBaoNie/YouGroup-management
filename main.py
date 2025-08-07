@@ -100,13 +100,11 @@ class AutoRecallKeywordPlugin(Star):
                     return
 
         if self.recall_numbers:
-            for segment in getattr(event.message_obj, 'message', []):
-                if segment.type == 'text':
-                    text_content = segment.data.get('text', '')
-                    if re.search(r"\d{6,}", text_content):
-                        await self.try_recall(event, message_id, group_id, sender_id)
-                        logger.info(f"检测到连续数字，已撤回 {sender_id} 的消息: {text_content}")
-                        return
+            # 直接在整条消息上匹配连续 6 位及以上数字
+            if re.search(r"\d{6,}", message_str):
+                await self.try_recall(event, message_id, group_id, sender_id)
+                logger.info(f"检测到连续数字，已撤回 {sender_id} 的消息: {message_str}")
+                return
 
         now = time.time()
         key = (group_id, sender_id)
