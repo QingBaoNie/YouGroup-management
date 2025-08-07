@@ -1,7 +1,8 @@
+from astrbot import logger
+from astrbot.api.star import Context, Star, register
 from astrbot.core.star import filter
-from astrbot.api import logger
-from astrbot.core.star import Context, Star, register
-from astrbot.core.model import AstrMessageEvent, EventMessageType
+from astrbot.core.star.filter.event_message_type import EventMessageType
+from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 
 import time
 from collections import defaultdict, deque
