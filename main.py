@@ -101,7 +101,7 @@ class AutoRecallKeywordPlugin(Star):
 
         if self.recall_numbers:
             for segment in getattr(event.message_obj, 'message', []):
-                if segment.type == 'Text':
+                if segment.type == 'text':
                     text_content = segment.data.get('text', '')
                     if re.search(r"\d{6,}", text_content):
                         await self.try_recall(event, message_id, group_id, sender_id)
