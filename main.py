@@ -149,7 +149,7 @@ class AutoRecallKeywordPlugin(Star):
                 at_list.append(getattr(segment, 'qq', None))
 
         if not at_list:
-            logger.error(f"")
+           logger.error("未检测到 @目标用户，无法执行该命令")
             return
 
         target_id = str(at_list[0])
