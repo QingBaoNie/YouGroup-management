@@ -5,7 +5,7 @@ from collections import defaultdict, deque
 
 from astrbot import logger
 from astrbot.api.star import Context, Star, register
-from astrbot.api.star.filter import event_message_type  # ✅ 正确导入
+from astrbot.core.star.filter.event_message_type import event_message_type
 from astrbot.core.star.filter.event_message_type import EventMessageType  # ✅ 正确导入
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
 
