@@ -101,14 +101,13 @@ class AutoRecallKeywordPlugin(Star):
             for segment in getattr(event.message_obj, 'message', []):
                 if segment.type == 'Text':
                     text_content = segment.data.get('text', '')
-                    phone_match = re.search(r"(?:\+?86)?1[3-9]\d{9}", text_content)
-                    qq_match = re.search(r"(?<!\d)([1-9]\d{4,10})(?!\d)", text_content)
-                    wechat_match = re.search(r"[a-zA-Z][-_a-zA-Z0-9]{5,19}", text_content)
 
-                    if phone_match or qq_match or wechat_match:
+                    # 匹配连续6位以上的纯数字段
+                    if re.search(r"\d{6,}", text_content):
                         await self.try_recall(event, message_id, group_id, sender_id)
-                        logger.info(f"检测到号码信息（手机号/微信号/QQ号），已撤回 {sender_id} 的消息")
+                        logger.info(f"检测到连续数字（疑似群号/QQ号/手机号），已撤回 {sender_id} 的消息：{text_content}")
                         return
+
 
         now = time.time()
         key = (group_id, sender_id)
