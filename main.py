@@ -150,7 +150,7 @@ class AutoRecallKeywordPlugin(Star):
                 at_list.append(getattr(segment, 'qq', None))
 
         if not at_list:
-           logger.error("未检测到 @目标用户，无法执行该命令")
+            logger.error("未检测到 @目标用户，无法执行该命令")
             return
 
         target_id = str(at_list[0])
@@ -222,6 +222,7 @@ class AutoRecallKeywordPlugin(Star):
                         logger.error(f"撤回 {target_id} 消息 {msg_data['message_id']} 失败: {e}")
 
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 的 {deleted} 条消息")
+
 
     async def try_recall(self, event: AstrMessageEvent, message_id: str, group_id: int, sender_id: int):
         try:
