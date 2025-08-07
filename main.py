@@ -1,4 +1,5 @@
-from astrbot.api import filter, logger
+from astrbot.core.star import filter  # ✅ 正确位置
+from astrbot.api import logger
 from astrbot.api.star import Context, Star, register
 from astrbot.model import AstrMessageEvent, EventMessageType
 
