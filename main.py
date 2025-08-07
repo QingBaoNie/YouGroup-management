@@ -5,8 +5,8 @@ from collections import defaultdict, deque
 
 from astrbot import logger
 from astrbot.api.star import Context, Star, register
-from astrbot.api.star.filter import event_message_type
-from astrbot.core.star.filter.event_message_type import EventMessageType
+from astrbot.api.star.filter import event_message_type  # ✅ 正确导入
+from astrbot.core.star.filter.event_message_type import EventMessageType  # ✅ 正确导入
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
 
 @register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.5", "https://github.com/QingBaoNie/Cesn")
