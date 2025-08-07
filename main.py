@@ -1,14 +1,12 @@
-from astrbot.core.star import filter  # ✅ 正确位置
-from astrbot.api import logger
+from astrbot.api.event import filter, AstrMessageEvent  # ✅ 恢复为原始导入位置
 from astrbot.api.star import Context, Star, register
-from astrbot.model import AstrMessageEvent, EventMessageType
+from astrbot.api import logger
+from astrbot.model import EventMessageType
 
 import time
 from collections import defaultdict, deque
 import json
 import re
-
-
 @register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.5", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config):
