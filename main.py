@@ -5,7 +5,8 @@ from collections import defaultdict, deque
 
 from astrbot import logger
 from astrbot.api.star import Context, Star, register
-from astrbot.core.star.filter.event_message_type import event_message_type, EventMessageType
+from astrbot.api.event import filter
+from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
 
 @register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.5", "https://github.com/QingBaoNie/Cesn")
@@ -56,7 +57,7 @@ class AutoRecallKeywordPlugin(Star):
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info("已保存数据到 cesn_data.json")
 
-    @event_message_type(EventMessageType.GROUP_MESSAGE)
+    @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
         if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
             return
@@ -122,7 +123,7 @@ class AutoRecallKeywordPlugin(Star):
 
         await self.handle_commands(event)
 
-    @event_message_type(EventMessageType.ALL)
+    @filter.event_message_type(EventMessageType.ALL)
     async def handle_group_increase(self, event: AstrMessageEvent):
         if getattr(event.message_obj, 'notice_type', None) != 'group_increase':
             return
