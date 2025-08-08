@@ -64,25 +64,27 @@ class AutoRecallKeywordPlugin(Star):
 
         group_id = event.get_group_id()
         sender_id = event.get_sender_id()
+        message_str = event.message_str.strip()
+        message_id = event.message_obj.message_id
 
-        # 跳过群主和管理员
+        # 1. 判断是否为命令消息
+        command_keywords = ("禁言", "解禁", "解言", "踢黑", "解黑", "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回")
+        if message_str.startswith(command_keywords):
+            # 直接执行命令，不进入撤回机制
+            await self.handle_commands(event)
+            return
+
+        # 2. 非命令消息 → 群主/管理员跳过撤回机制
         try:
             member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
             role = member_info.get("role", "member")
             if role in ("owner", "admin"):
-                logger.debug(f"检测到 {sender_id} 身份为 {role}，跳过撤回机制")
+                logger.debug(f"检测到 {sender_id} 身份为 {role}，跳过撤回检测")
                 return
         except Exception as e:
             logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
 
-        message_str = event.message_str.strip()
-        message_id = event.message_obj.message_id
-
-        if message_str.startswith("撤回"):
-            logger.info("检测到撤回命令，跳过刷屏检测")
-            await self.handle_commands(event)
-            return
-
+        # 3. 普通成员消息 → 撤回机制
         if str(sender_id) in self.kick_black_list:
             await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
             await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
@@ -111,16 +113,13 @@ class AutoRecallKeywordPlugin(Star):
                     return
 
         if self.recall_numbers:
-            logger.debug(f"[recall_numbers] 进入数字检测，message_str={message_str!r}")
             match = re.search(r"\d{6,}", message_str)
             if match:
-                logger.debug(f"[recall_numbers] 正则匹配成功，匹配内容={match.group(0)}")
                 await self.try_recall(event, message_id, group_id, sender_id)
                 logger.info(f"检测到连续数字，已撤回 {sender_id} 的消息: {message_str}")
                 return
-            else:
-                logger.debug("[recall_numbers] 正则未匹配，继续后续逻辑")
 
+        # 刷屏检测
         now = time.time()
         key = (group_id, sender_id)
         self.user_message_times[key].append(now)
@@ -134,8 +133,6 @@ class AutoRecallKeywordPlugin(Star):
                 self.user_message_times[key].clear()
                 self.user_message_ids[key].clear()
 
-        await self.handle_commands(event)
-
     @filter.event_message_type(EventMessageType.ALL)
     async def handle_group_increase(self, event: AstrMessageEvent):
         if getattr(event.message_obj, 'notice_type', None) != 'group_increase':
@@ -144,7 +141,6 @@ class AutoRecallKeywordPlugin(Star):
         group_id = event.get_group_id()
         user_id = event.message_obj.user_id
 
-        # 跳过群主和管理员
         try:
             member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(user_id))
             role = member_info.get("role", "member")
@@ -183,7 +179,7 @@ class AutoRecallKeywordPlugin(Star):
             await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=duration)
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已禁言 {target_id} {duration//60}分钟")
 
-        elif msg.startswith("解禁") or msg.startswith("解言"):
+        elif msg.startswith(("解禁", "解言")):
             await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=0)
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已解除 {target_id} 禁言")
 
