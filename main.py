@@ -68,15 +68,19 @@ async def auto_recall(self, event: AstrMessageEvent):
     message_id = event.message_obj.message_id
 
     # 1. 判断是否为命令消息
-    command_keywords = ("禁言", "解禁", "解言", "踢黑", "解黑", "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回")
+    command_keywords = (
+        "禁言", "解禁", "解言", "踢黑", "解黑",
+        "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回"
+    )
     if message_str.startswith(command_keywords):
-        # 直接执行命令，不进入撤回机制
         await self.handle_commands(event)
         return
 
     # 2. 非命令消息 → 群主/管理员跳过撤回机制
     try:
-        member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
+        member_info = await event.bot.get_group_member_info(
+            group_id=int(group_id), user_id=int(sender_id)
+        )
         role = member_info.get("role", "member")
         if role in ("owner", "admin"):
             logger.debug(f"检测到 {sender_id} 身份为 {role}，跳过撤回检测")
@@ -84,27 +88,34 @@ async def auto_recall(self, event: AstrMessageEvent):
     except Exception as e:
         logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
 
-    # 3. 普通成员消息 → 撤回机制
+    # 3. 黑名单处理
     if str(sender_id) in self.kick_black_list:
         await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
-        await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
+        await event.bot.send_group_msg(
+            group_id=int(group_id),
+            message=f"检测到黑名单用户 {sender_id}，已踢出！"
+        )
         return
 
+    # 4. 针对名单处理
     if str(sender_id) in self.target_user_list:
         await event.bot.delete_msg(message_id=message_id)
         logger.info(f"静默撤回 {sender_id} 的消息")
         return
 
+    # 5. 关键词检测
     for word in self.bad_words:
         if word in message_str:
             await self.try_recall(event, message_id, group_id, sender_id)
             return
 
+    # 6. 链接检测
     if self.recall_links and ("http://" in message_str or "https://" in message_str):
         await self.try_recall(event, message_id, group_id, sender_id)
         logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
         return
 
+    # 7. 卡片消息检测
     if self.recall_cards:
         for segment in getattr(event.message_obj, 'message', []):
             if segment.type in ['Share', 'Card', 'Contact', 'Json', 'Xml']:
@@ -112,10 +123,10 @@ async def auto_recall(self, event: AstrMessageEvent):
                 logger.info(f"检测到卡片消息，已撤回 {sender_id} 的消息")
                 return
 
+    # 8. 号码检测（过滤@用户）
     if self.recall_numbers:
-        # === 新增：先去掉 @用户ID，避免误判 ===
-        clean_msg = re.sub(r"\(?(?:[1-9]\d{5,11})\)?", "", message_str)  # 去掉 (3212549884) 这种
-        clean_msg = re.sub(r"\[At:\d+\]", "", clean_msg)  # 去掉 [At:3212549884] 这种
+        clean_msg = re.sub(r"\[At:\d+\]", "", message_str)       # 去掉 [At:3212549884]
+        clean_msg = re.sub(r"@\S+\(\d+\)", "", clean_msg)        # 去掉 @昵称(3212549884)
         clean_msg = clean_msg.strip()
 
         match = re.search(r"\d{6,}", clean_msg)
@@ -124,7 +135,7 @@ async def auto_recall(self, event: AstrMessageEvent):
             logger.info(f"检测到连续数字，已撤回 {sender_id} 的消息: {message_str}")
             return
 
-    # 刷屏检测
+    # 9. 刷屏检测
     now = time.time()
     key = (group_id, sender_id)
     self.user_message_times[key].append(now)
@@ -132,11 +143,16 @@ async def auto_recall(self, event: AstrMessageEvent):
 
     if len(self.user_message_times[key]) == self.spam_count:
         if now - self.user_message_times[key][0] <= self.spam_interval:
-            await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
+            await event.bot.set_group_ban(
+                group_id=int(group_id),
+                user_id=int(sender_id),
+                duration=self.spam_ban_duration
+            )
             for msg_id in self.user_message_ids[key]:
                 await event.bot.delete_msg(message_id=msg_id)
             self.user_message_times[key].clear()
             self.user_message_ids[key].clear()
+
 
     @filter.event_message_type(EventMessageType.ALL)
     async def handle_group_increase(self, event: AstrMessageEvent):
