@@ -60,7 +60,7 @@ class AutoRecallKeywordPlugin(Star):
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info("已保存数据到 cesn_data.json")
 
-    async def _auto_delete_after(self, bot, message_id: int, delay: int = 120):
+    async def _auto_delete_after(self, bot, message_id: int, delay: int = 60):
         """延时撤回消息"""
         try:
             await asyncio.sleep(delay)
