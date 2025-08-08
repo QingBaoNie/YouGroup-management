@@ -57,81 +57,86 @@ class AutoRecallKeywordPlugin(Star):
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info("已保存数据到 cesn_data.json")
 
-    @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
-    async def auto_recall(self, event: AstrMessageEvent):
-        if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
+@filter.event_message_type(EventMessageType.GROUP_MESSAGE)
+async def auto_recall(self, event: AstrMessageEvent):
+    if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
+        return
+
+    group_id = event.get_group_id()
+    sender_id = event.get_sender_id()
+    message_str = event.message_str.strip()
+    message_id = event.message_obj.message_id
+
+    # 1. 判断是否为命令消息
+    command_keywords = ("禁言", "解禁", "解言", "踢黑", "解黑", "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回")
+    if message_str.startswith(command_keywords):
+        # 直接执行命令，不进入撤回机制
+        await self.handle_commands(event)
+        return
+
+    # 2. 非命令消息 → 群主/管理员跳过撤回机制
+    try:
+        member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
+        role = member_info.get("role", "member")
+        if role in ("owner", "admin"):
+            logger.debug(f"检测到 {sender_id} 身份为 {role}，跳过撤回检测")
             return
+    except Exception as e:
+        logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
 
-        group_id = event.get_group_id()
-        sender_id = event.get_sender_id()
-        message_str = event.message_str.strip()
-        message_id = event.message_obj.message_id
+    # 3. 普通成员消息 → 撤回机制
+    if str(sender_id) in self.kick_black_list:
+        await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
+        await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
+        return
 
-        # 1. 判断是否为命令消息
-        command_keywords = ("禁言", "解禁", "解言", "踢黑", "解黑", "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回")
-        if message_str.startswith(command_keywords):
-            # 直接执行命令，不进入撤回机制
-            await self.handle_commands(event)
-            return
+    if str(sender_id) in self.target_user_list:
+        await event.bot.delete_msg(message_id=message_id)
+        logger.info(f"静默撤回 {sender_id} 的消息")
+        return
 
-        # 2. 非命令消息 → 群主/管理员跳过撤回机制
-        try:
-            member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
-            role = member_info.get("role", "member")
-            if role in ("owner", "admin"):
-                logger.debug(f"检测到 {sender_id} 身份为 {role}，跳过撤回检测")
-                return
-        except Exception as e:
-            logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
-
-        # 3. 普通成员消息 → 撤回机制
-        if str(sender_id) in self.kick_black_list:
-            await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
-            return
-
-        if str(sender_id) in self.target_user_list:
-            await event.bot.delete_msg(message_id=message_id)
-            logger.info(f"静默撤回 {sender_id} 的消息")
-            return
-
-        for word in self.bad_words:
-            if word in message_str:
-                await self.try_recall(event, message_id, group_id, sender_id)
-                return
-
-        if self.recall_links and ("http://" in message_str or "https://" in message_str):
+    for word in self.bad_words:
+        if word in message_str:
             await self.try_recall(event, message_id, group_id, sender_id)
-            logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
             return
 
-        if self.recall_cards:
-            for segment in getattr(event.message_obj, 'message', []):
-                if segment.type in ['Share', 'Card', 'Contact', 'Json', 'Xml']:
-                    await self.try_recall(event, message_id, group_id, sender_id)
-                    logger.info(f"检测到卡片消息，已撤回 {sender_id} 的消息")
-                    return
+    if self.recall_links and ("http://" in message_str or "https://" in message_str):
+        await self.try_recall(event, message_id, group_id, sender_id)
+        logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
+        return
 
-        if self.recall_numbers:
-            match = re.search(r"\d{6,}", message_str)
-            if match:
+    if self.recall_cards:
+        for segment in getattr(event.message_obj, 'message', []):
+            if segment.type in ['Share', 'Card', 'Contact', 'Json', 'Xml']:
                 await self.try_recall(event, message_id, group_id, sender_id)
-                logger.info(f"检测到连续数字，已撤回 {sender_id} 的消息: {message_str}")
+                logger.info(f"检测到卡片消息，已撤回 {sender_id} 的消息")
                 return
 
-        # 刷屏检测
-        now = time.time()
-        key = (group_id, sender_id)
-        self.user_message_times[key].append(now)
-        self.user_message_ids[key].append(message_id)
+    if self.recall_numbers:
+        # === 新增：先去掉 @用户ID，避免误判 ===
+        clean_msg = re.sub(r"\(?(?:[1-9]\d{5,11})\)?", "", message_str)  # 去掉 (3212549884) 这种
+        clean_msg = re.sub(r"\[At:\d+\]", "", clean_msg)  # 去掉 [At:3212549884] 这种
+        clean_msg = clean_msg.strip()
 
-        if len(self.user_message_times[key]) == self.spam_count:
-            if now - self.user_message_times[key][0] <= self.spam_interval:
-                await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
-                for msg_id in self.user_message_ids[key]:
-                    await event.bot.delete_msg(message_id=msg_id)
-                self.user_message_times[key].clear()
-                self.user_message_ids[key].clear()
+        match = re.search(r"\d{6,}", clean_msg)
+        if match:
+            await self.try_recall(event, message_id, group_id, sender_id)
+            logger.info(f"检测到连续数字，已撤回 {sender_id} 的消息: {message_str}")
+            return
+
+    # 刷屏检测
+    now = time.time()
+    key = (group_id, sender_id)
+    self.user_message_times[key].append(now)
+    self.user_message_ids[key].append(message_id)
+
+    if len(self.user_message_times[key]) == self.spam_count:
+        if now - self.user_message_times[key][0] <= self.spam_interval:
+            await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
+            for msg_id in self.user_message_ids[key]:
+                await event.bot.delete_msg(message_id=msg_id)
+            self.user_message_times[key].clear()
+            self.user_message_ids[key].clear()
 
     @filter.event_message_type(EventMessageType.ALL)
     async def handle_group_increase(self, event: AstrMessageEvent):
