@@ -211,7 +211,7 @@ class AutoRecallKeywordPlugin(Star):
         qr_url = f"{qr_api}?{params}"
 
         message_segments = [
-            {"type": "text", "data": {"text": f"扫描以下二维码查询『{uin}』与你的共同群（120秒后自动撤回）\n"}},
+            {"type": "text", "data": {"text": f"扫描以下二维码查询『{uin}』与你的共同群（60秒后自动撤回）\n"}},
             {"type": "image", "data": {"file": qr_url}},
         ]
 
