@@ -1,6 +1,7 @@
 import time
 import json
 import re
+import urllib.parse
 from collections import defaultdict, deque
 
 from astrbot import logger
@@ -10,7 +11,7 @@ from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
 
 
-@register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.6", "https://github.com/QingBaoNie/Cesn")
+@register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群)", "1.1.7", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config):
         super().__init__(context)
@@ -60,6 +61,7 @@ class AutoRecallKeywordPlugin(Star):
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
+        # 跳过系统通知
         if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
             return
 
@@ -68,7 +70,13 @@ class AutoRecallKeywordPlugin(Star):
         message_str = event.message_str.strip()
         message_id = event.message_obj.message_id
 
-        # 1. 判断是否为命令消息
+        # === 新增：查共群 指令（无需@）===
+        # 语法：查共群 123123
+        if message_str.startswith("查共群"):
+            await self.handle_check_common_groups(event)
+            return
+
+        # 1. 判断是否为需要@对象的命令消息
         command_keywords = (
             "禁言", "解禁", "解言", "踢黑", "解黑",
             "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回"
@@ -106,7 +114,7 @@ class AutoRecallKeywordPlugin(Star):
 
         # 5. 关键词检测
         for word in self.bad_words:
-            if word in message_str:
+            if word and word in message_str:
                 await self.try_recall(event, message_id, group_id, sender_id)
                 return
 
@@ -116,10 +124,11 @@ class AutoRecallKeywordPlugin(Star):
             logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
             return
 
-        # 7. 卡片消息检测
+        # 7. 卡片消息检测（根据适配器类型可能是 share/json/xml/contact）
         if self.recall_cards:
             for segment in getattr(event.message_obj, 'message', []):
-                if segment.type in ['Share', 'Card', 'Contact', 'Json', 'Xml']:
+                seg_type = getattr(segment, 'type', '')
+                if seg_type in ['Share', 'Card', 'Contact', 'Json', 'Xml', 'share', 'json', 'xml', 'contact']:
                     await self.try_recall(event, message_id, group_id, sender_id)
                     logger.info(f"检测到卡片消息，已撤回 {sender_id} 的消息")
                     return
@@ -129,7 +138,6 @@ class AutoRecallKeywordPlugin(Star):
             clean_msg = re.sub(r"\[At:\d+\]", "", message_str)
             clean_msg = re.sub(r"@\S+\(\d+\)", "", clean_msg)
             clean_msg = clean_msg.strip()
-
             match = re.search(r"\d{6,}", clean_msg)
             if match:
                 await self.try_recall(event, message_id, group_id, sender_id)
@@ -150,7 +158,10 @@ class AutoRecallKeywordPlugin(Star):
                     duration=self.spam_ban_duration
                 )
                 for msg_id in self.user_message_ids[key]:
-                    await event.bot.delete_msg(message_id=msg_id)
+                    try:
+                        await event.bot.delete_msg(message_id=msg_id)
+                    except Exception as e:
+                        logger.error(f"刷屏批量撤回失败: {e}")
                 self.user_message_times[key].clear()
                 self.user_message_ids[key].clear()
 
@@ -170,6 +181,50 @@ class AutoRecallKeywordPlugin(Star):
                     logger.error(f"撤回失败: {e}（用户角色: {role}）")
             except Exception as ex:
                 logger.error(f"撤回失败且查询用户角色失败: {e} / 查询错误: {ex}")
+
+    async def handle_check_common_groups(self, event: AstrMessageEvent):
+        """
+        语法：查共群 <QQ号>
+        示例：查共群 123123
+        返回：提示 + 二维码（内容为 https://ti.qq.com/friends/recall?uin=<QQ>）
+        """
+        group_id = event.get_group_id()
+        msg = event.message_str.strip()
+
+        m = re.search(r"^查共群\s+(\d{5,12})$", msg)
+        if not m:
+            await event.bot.send_group_msg(
+                group_id=int(group_id),
+                message="用法：查共群 <QQ号>（例如：查共群 123123）"
+            )
+            return
+
+        uin = m.group(1)
+        base_url = f"https://ti.qq.com/friends/recall?uin={uin}"
+
+        # 公共二维码接口（可替换为你自己的服务）
+        qr_api = "https://api.qrserver.com/v1/create-qr-code/"
+        params = f"size=360x360&margin=0&data={urllib.parse.quote_plus(base_url)}"
+        qr_url = f"{qr_api}?{params}"
+
+        # OneBot/aiocqhttp 兼容的消息段（文本 + 图片直链）
+        message_segments = [
+            {"type": "text", "data": {"text": f"扫描以下二维码查询『{uin}』与你的共同群\n"}},
+            {"type": "image", "data": {"file": qr_url}},
+        ]
+
+        try:
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 查共群")
+
+            await event.bot.send_group_msg(group_id=int(group_id), message=message_segments)
+        except Exception as e:
+            logger.error(f"发送二维码失败，退回文本方式: {e}")
+            # 退回文本 + 链接
+            await event.bot.send_group_msg(
+                group_id=int(group_id),
+                message=f"扫描以下二维码查询『{uin}』与你的共同群：\n{base_url}"
+            )
 
     async def handle_commands(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
@@ -246,7 +301,7 @@ class AutoRecallKeywordPlugin(Star):
                         await event.bot.delete_msg(message_id=msg_data['message_id'])
                         deleted += 1
                     except Exception as e:
-                        logger.error(f"撤回 {target_id} 消息 {msg_data['message_id']} 失败: {e}")
+                        logger.error(f"撤回 {target_id} 消息 {msg_data.get('message_id')} 失败: {e}")
 
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 的 {deleted} 条消息")
 
