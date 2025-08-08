@@ -77,7 +77,7 @@ async def auto_recall(self, event: AstrMessageEvent):
     group_id = event.get_group_id()
     sender_id = event.get_sender_id()
 
-    # ===== 新增：关键词自动回复（模糊匹配） =====
+    # ===== 新增：关键词自动回复（模糊匹配，不中断后续逻辑） =====
     auto_reply_map = {
         "早上好": "早上好呀！",
         "晚上好": "晚上好呀！",
@@ -86,7 +86,7 @@ async def auto_recall(self, event: AstrMessageEvent):
     for key, reply in auto_reply_map.items():
         if key in message_str:
             await event.bot.send_group_msg(group_id=int(group_id), message=reply)
-            break  # 匹配到一个就停止
+            # 这里不 break，让后面群管、刷屏检测还能运行
 
     # ===== 原撤回命令检测 =====
     if message_str.startswith("撤回"):
@@ -154,6 +154,7 @@ async def auto_recall(self, event: AstrMessageEvent):
             self.user_message_ids[key].clear()
 
     await self.handle_commands(event)
+
 
     async def handle_commands(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
