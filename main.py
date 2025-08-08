@@ -154,6 +154,24 @@ async def auto_recall(self, event: AstrMessageEvent):
             self.user_message_ids[key].clear()
 
 
+async def try_recall(self, event: AstrMessageEvent, message_id: str, group_id: int, sender_id: int):
+    """安全撤回消息，带权限检查"""
+    try:
+        await event.bot.delete_msg(message_id=message_id)
+    except Exception as e:
+        try:
+            member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
+            role = member_info.get('role', 'member')
+            if role == 'owner':
+                logger.error(f"撤回失败: 对方是群主({sender_id})，无权限撤回。")
+            elif role == 'admin':
+                logger.error(f"撤回失败: 对方是管理员({sender_id})，无权限撤回。")
+            else:
+                logger.error(f"撤回失败: {e}（用户角色: {role}）")
+        except Exception as ex:
+            logger.error(f"撤回失败且查询用户角色失败: {e} / 查询错误: {ex}")
+
+
     @filter.event_message_type(EventMessageType.ALL)
     async def handle_group_increase(self, event: AstrMessageEvent):
         if getattr(event.message_obj, 'notice_type', None) != 'group_increase':
