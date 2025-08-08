@@ -9,57 +9,53 @@ from astrbot.api.event import filter
 from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
 
+
 @register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)", "1.1.5", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config):
         super().__init__(context)
         self.config = config
-        self.user_message_times = defaultdict(lambda: deque(maxlen=5))
-        self.user_message_ids = defaultdict(lambda: deque(maxlen=5))
+
+        # 预初始化所有属性，防止 initialize 还没执行就被调用
+        self.bad_words = []
+        self.spam_count = 5
+        self.spam_interval = 3
+        self.spam_ban_duration = 60
+        self.sub_admin_list = set()
         self.kick_black_list = set()
         self.target_user_list = set()
-        self.sub_admin_list = set()
+        self.recall_links = False
+        self.recall_cards = False
+        self.recall_numbers = False
+        self.user_message_times = defaultdict(lambda: deque(maxlen=5))
+        self.user_message_ids = defaultdict(lambda: deque(maxlen=5))
 
-async def initialize(self):
-    config_data = self.config
-    self.bad_words = config_data.get("bad_words", [])
-    spam_config = config_data.get("spam_config", {})
-    admin_config = config_data.get("admin_config", {})
+    async def initialize(self):
+        config_data = self.config
+        self.bad_words = config_data.get("bad_words", [])
+        spam_config = config_data.get("spam_config", {})
+        admin_config = config_data.get("admin_config", {})
 
-    self.spam_count = spam_config.get("spam_count", 5)
-    self.spam_interval = spam_config.get("spam_interval", 3)
-    self.spam_ban_duration = spam_config.get("spam_ban_duration", 60)
+        self.spam_count = spam_config.get("spam_count", 5)
+        self.spam_interval = spam_config.get("spam_interval", 3)
+        self.spam_ban_duration = spam_config.get("spam_ban_duration", 60)
 
-    self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
-    self.kick_black_list = set(admin_config.get("kick_black_list", []))
-    self.target_user_list = set(admin_config.get("target_user_list", []))
+        self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
+        self.kick_black_list = set(admin_config.get("kick_black_list", []))
+        self.target_user_list = set(admin_config.get("target_user_list", []))
 
-    self.recall_links = admin_config.get("recall_links", False)
-    self.recall_cards = admin_config.get("recall_cards", False)
-    self.recall_numbers = admin_config.get("recall_numbers", False)
+        self.recall_links = admin_config.get("recall_links", False)
+        self.recall_cards = admin_config.get("recall_cards", False)
+        self.recall_numbers = admin_config.get("recall_numbers", False)
 
-    self.save_json_data()
+        self.save_json_data()
 
-    self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
-    self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
+        self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
+        self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
 
-    # ===== 新增：读取 zd.txt 自动回复内容 =====
-    self.auto_reply_map = {}
-    try:
-        with open('zd.txt', 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or '-' not in line:
-                    continue
-                key, value = line.split('-', 1)
-                self.auto_reply_map[key.strip()] = value.strip()
-        logger.info(f"已加载自动回复关键词: {self.auto_reply_map}")
-    except FileNotFoundError:
-        logger.warning("未找到 zd.txt 文件，自动回复功能将不可用")
-
-    logger.info(f"敏感词列表: {self.bad_words}")
-    logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
-    logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list}")
+        logger.info(f"敏感词列表: {self.bad_words}")
+        logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
+        logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list}")
 
     def save_json_data(self):
         data = {
@@ -71,101 +67,100 @@ async def initialize(self):
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info("已保存数据到 cesn_data.json")
 
-@filter.event_message_type(EventMessageType.GROUP_MESSAGE)
-async def auto_recall(self, event: AstrMessageEvent):
-    if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
-        return
-
-    message_str = event.message_str.strip()
-    message_id = event.message_obj.message_id
-    group_id = event.get_group_id()
-    sender_id = event.get_sender_id()
-
-    # ===== 新增：从 zd.txt 读取关键词自动回复（模糊匹配） =====
-    auto_reply_map = {}
-    try:
-        with open('zd.txt', 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or '-' not in line:
-                    continue
-                key, value = line.split('-', 1)
-                auto_reply_map[key.strip()] = value.strip()
-    except FileNotFoundError:
-        logger.warning("未找到 zd.txt，自动回复功能不可用")
-
-    for key, reply in auto_reply_map.items():
-        if key in message_str:
-            await event.bot.send_group_msg(group_id=int(group_id), message=reply)
-            break  # 匹配到一个就停止
-
-    # ===== 原撤回命令检测 =====
-    if message_str.startswith("撤回"):
-        logger.info("检测到撤回命令，跳过刷屏检测")
-        await self.handle_commands(event)
-        return
-
-    if str(sender_id) in self.kick_black_list:
-        await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
-        await event.bot.send_group_msg(
-            group_id=int(group_id),
-            message=f"检测到黑名单用户 {sender_id}，已踢出！"
-        )
-        return
-
-    if str(sender_id) in self.target_user_list:
-        await event.bot.delete_msg(message_id=message_id)
-        logger.info(f"静默撤回 {sender_id} 的消息")
-        return
-
-    for word in self.bad_words:
-        if word in message_str:
-            await self.try_recall(event, message_id, group_id, sender_id)
+    @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
+    async def auto_recall(self, event: AstrMessageEvent):
+        if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
             return
 
-    if self.recall_links and ("http://" in message_str or "https://" in message_str):
-        await self.try_recall(event, message_id, group_id, sender_id)
-        logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
-        return
+        message_str = event.message_str.strip()
+        message_id = event.message_obj.message_id
+        group_id = event.get_group_id()
+        sender_id = event.get_sender_id()
 
-    if self.recall_cards:
-        for segment in getattr(event.message_obj, 'message', []):
-            if segment.type in ['Share', 'Card', 'Contact', 'Json', 'Xml']:
+        # ===== 实时读取 zd.txt 自动回复（模糊匹配） =====
+        auto_reply_map = {}
+        try:
+            with open('zd.txt', 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or '-' not in line:
+                        continue
+                    key, value = line.split('-', 1)
+                    auto_reply_map[key.strip()] = value.strip()
+        except FileNotFoundError:
+            logger.warning("未找到 zd.txt，自动回复功能不可用")
+
+        for key, reply in auto_reply_map.items():
+            if key in message_str:
+                await event.bot.send_group_msg(group_id=int(group_id), message=reply)
+                break  # 匹配到一个就停止
+
+        # ===== 原撤回命令检测 =====
+        if message_str.startswith("撤回"):
+            logger.info("检测到撤回命令，跳过刷屏检测")
+            await self.handle_commands(event)
+            return
+
+        if str(sender_id) in self.kick_black_list:
+            await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
+            await event.bot.send_group_msg(
+                group_id=int(group_id),
+                message=f"检测到黑名单用户 {sender_id}，已踢出！"
+            )
+            return
+
+        if str(sender_id) in self.target_user_list:
+            await event.bot.delete_msg(message_id=message_id)
+            logger.info(f"静默撤回 {sender_id} 的消息")
+            return
+
+        for word in self.bad_words:
+            if word in message_str:
                 await self.try_recall(event, message_id, group_id, sender_id)
-                logger.info(f"检测到卡片消息，已撤回 {sender_id} 的消息")
                 return
 
-    if self.recall_numbers:
-        logger.debug(f"[recall_numbers] 进入数字检测，message_str={message_str!r}")
-        match = re.search(r"\d{6,}", message_str)
-        if match:
-            logger.debug(f"[recall_numbers] 正则匹配成功，匹配内容={match.group(0)}")
+        if self.recall_links and ("http://" in message_str or "https://" in message_str):
             await self.try_recall(event, message_id, group_id, sender_id)
-            logger.info(f"检测到连续数字，已撤回 {sender_id} 的消息: {message_str}")
+            logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
             return
-        else:
-            logger.debug("[recall_numbers] 正则未匹配，继续后续逻辑")
 
-    # ===== 刷屏检测 =====
-    now = time.time()
-    key = (group_id, sender_id)
-    self.user_message_times[key].append(now)
-    self.user_message_ids[key].append(message_id)
+        if self.recall_cards:
+            for segment in getattr(event.message_obj, 'message', []):
+                if segment.type in ['Share', 'Card', 'Contact', 'Json', 'Xml']:
+                    await self.try_recall(event, message_id, group_id, sender_id)
+                    logger.info(f"检测到卡片消息，已撤回 {sender_id} 的消息")
+                    return
 
-    if len(self.user_message_times[key]) == self.spam_count:
-        if now - self.user_message_times[key][0] <= self.spam_interval:
-            await event.bot.set_group_ban(
-                group_id=int(group_id),
-                user_id=int(sender_id),
-                duration=self.spam_ban_duration
-            )
-            for msg_id in self.user_message_ids[key]:
-                await event.bot.delete_msg(message_id=msg_id)
-            self.user_message_times[key].clear()
-            self.user_message_ids[key].clear()
+        if self.recall_numbers:
+            logger.debug(f"[recall_numbers] 进入数字检测，message_str={message_str!r}")
+            match = re.search(r"\d{6,}", message_str)
+            if match:
+                logger.debug(f"[recall_numbers] 正则匹配成功，匹配内容={match.group(0)}")
+                await self.try_recall(event, message_id, group_id, sender_id)
+                logger.info(f"检测到连续数字，已撤回 {sender_id} 的消息: {message_str}")
+                return
+            else:
+                logger.debug("[recall_numbers] 正则未匹配，继续后续逻辑")
 
-    await self.handle_commands(event)
+        # ===== 刷屏检测 =====
+        now = time.time()
+        key = (group_id, sender_id)
+        self.user_message_times[key].append(now)
+        self.user_message_ids[key].append(message_id)
 
+        if len(self.user_message_times[key]) == self.spam_count:
+            if now - self.user_message_times[key][0] <= self.spam_interval:
+                await event.bot.set_group_ban(
+                    group_id=int(group_id),
+                    user_id=int(sender_id),
+                    duration=self.spam_ban_duration
+                )
+                for msg_id in self.user_message_ids[key]:
+                    await event.bot.delete_msg(message_id=msg_id)
+                self.user_message_times[key].clear()
+                self.user_message_ids[key].clear()
+
+        await self.handle_commands(event)
 
     async def handle_commands(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
