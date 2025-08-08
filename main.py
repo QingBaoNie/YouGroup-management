@@ -2,6 +2,7 @@ import time
 import json
 import re
 import urllib.parse
+import asyncio
 from collections import defaultdict, deque
 
 from astrbot import logger
@@ -59,6 +60,15 @@ class AutoRecallKeywordPlugin(Star):
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info("已保存数据到 cesn_data.json")
 
+    async def _auto_delete_after(self, bot, message_id: int, delay: int = 120):
+        """延时撤回消息"""
+        try:
+            await asyncio.sleep(delay)
+            await bot.delete_msg(message_id=message_id)
+            logger.debug(f"已自动撤回 message_id={message_id}")
+        except Exception as e:
+            logger.error(f"定时撤回失败 message_id={message_id}: {e}")
+
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
         # 跳过系统通知
@@ -71,7 +81,6 @@ class AutoRecallKeywordPlugin(Star):
         message_id = event.message_obj.message_id
 
         # === 新增：查共群 指令（无需@）===
-        # 语法：查共群 123123
         if message_str.startswith("查共群"):
             await self.handle_check_common_groups(event)
             return
@@ -124,7 +133,7 @@ class AutoRecallKeywordPlugin(Star):
             logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
             return
 
-        # 7. 卡片消息检测（根据适配器类型可能是 share/json/xml/contact）
+        # 7. 卡片消息检测
         if self.recall_cards:
             for segment in getattr(event.message_obj, 'message', []):
                 seg_type = getattr(segment, 'type', '')
@@ -133,7 +142,7 @@ class AutoRecallKeywordPlugin(Star):
                     logger.info(f"检测到卡片消息，已撤回 {sender_id} 的消息")
                     return
 
-        # 8. 号码检测（过滤@用户）
+        # 8. 号码检测
         if self.recall_numbers:
             clean_msg = re.sub(r"\[At:\d+\]", "", message_str)
             clean_msg = re.sub(r"@\S+\(\d+\)", "", clean_msg)
@@ -166,7 +175,6 @@ class AutoRecallKeywordPlugin(Star):
                 self.user_message_ids[key].clear()
 
     async def try_recall(self, event: AstrMessageEvent, message_id: str, group_id: int, sender_id: int):
-        """安全撤回消息，带权限检查"""
         try:
             await event.bot.delete_msg(message_id=message_id)
         except Exception as e:
@@ -183,33 +191,27 @@ class AutoRecallKeywordPlugin(Star):
                 logger.error(f"撤回失败且查询用户角色失败: {e} / 查询错误: {ex}")
 
     async def handle_check_common_groups(self, event: AstrMessageEvent):
-        """
-        语法：查共群 <QQ号>
-        示例：查共群 123123
-        返回：提示 + 二维码（内容为 https://ti.qq.com/friends/recall?uin=<QQ>）
-        """
         group_id = event.get_group_id()
         msg = event.message_str.strip()
 
         m = re.search(r"^查共群\s+(\d{5,12})$", msg)
         if not m:
-            await event.bot.send_group_msg(
+            resp = await event.bot.send_group_msg(
                 group_id=int(group_id),
                 message="用法：查共群 <QQ号>（例如：查共群 123123）"
             )
+            if isinstance(resp, dict) and "message_id" in resp:
+                asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"]))
             return
 
         uin = m.group(1)
         base_url = f"https://ti.qq.com/friends/recall?uin={uin}"
-
-        # 公共二维码接口（可替换为你自己的服务）
         qr_api = "https://api.qrserver.com/v1/create-qr-code/"
         params = f"size=360x360&margin=0&data={urllib.parse.quote_plus(base_url)}"
         qr_url = f"{qr_api}?{params}"
 
-        # OneBot/aiocqhttp 兼容的消息段（文本 + 图片直链）
         message_segments = [
-            {"type": "text", "data": {"text": f"扫描以下二维码查询『{uin}』与你的共同群\n"}},
+            {"type": "text", "data": {"text": f"扫描以下二维码查询『{uin}』与你的共同群（120秒后自动撤回）\n"}},
             {"type": "image", "data": {"file": qr_url}},
         ]
 
@@ -217,14 +219,17 @@ class AutoRecallKeywordPlugin(Star):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 查共群")
 
-            await event.bot.send_group_msg(group_id=int(group_id), message=message_segments)
+            resp = await event.bot.send_group_msg(group_id=int(group_id), message=message_segments)
+            if isinstance(resp, dict) and "message_id" in resp:
+                asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"]))
         except Exception as e:
             logger.error(f"发送二维码失败，退回文本方式: {e}")
-            # 退回文本 + 链接
-            await event.bot.send_group_msg(
+            resp = await event.bot.send_group_msg(
                 group_id=int(group_id),
-                message=f"扫描以下二维码查询『{uin}』与你的共同群：\n{base_url}"
+                message=f"扫描以下二维码查询『{uin}』与你的共同群（120秒后自动撤回）：\n{base_url}"
             )
+            if isinstance(resp, dict) and "message_id" in resp:
+                asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"]))
 
     async def handle_commands(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
