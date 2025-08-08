@@ -67,7 +67,7 @@ class AutoRecallKeywordPlugin(Star):
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info("已保存数据到 cesn_data.json")
 
-    @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
+@filter.event_message_type(EventMessageType.GROUP_MESSAGE)
 async def auto_recall(self, event: AstrMessageEvent):
     if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
         return
@@ -77,25 +77,16 @@ async def auto_recall(self, event: AstrMessageEvent):
     group_id = event.get_group_id()
     sender_id = event.get_sender_id()
 
-    # ===== 实时读取 zd.txt 自动回复（模糊匹配） =====
-    auto_reply_map = {}
-    try:
-        with open('zd.txt', 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or '-' not in line:
-                    continue
-                key, value = line.split('-', 1)
-                key = key.strip()
-                value = value.strip()
-                auto_reply_map[key] = value
-    except FileNotFoundError:
-        logger.warning("未找到 zd.txt，自动回复功能不可用")
-
+    # ===== 新增：关键词自动回复（模糊匹配） =====
+    auto_reply_map = {
+        "早上好": "早上好呀！",
+        "晚上好": "晚上好呀！",
+        "你好": "你好呀！",
+    }
     for key, reply in auto_reply_map.items():
-        if key and key in message_str:
+        if key in message_str:
             await event.bot.send_group_msg(group_id=int(group_id), message=reply)
-            return  # 触发回复后直接结束，不进入群管指令逻辑
+            break  # 匹配到一个就停止
 
     # ===== 原撤回命令检测 =====
     if message_str.startswith("撤回"):
@@ -163,7 +154,6 @@ async def auto_recall(self, event: AstrMessageEvent):
             self.user_message_ids[key].clear()
 
     await self.handle_commands(event)
-
 
     async def handle_commands(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
