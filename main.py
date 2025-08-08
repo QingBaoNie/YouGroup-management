@@ -20,32 +20,46 @@ class AutoRecallKeywordPlugin(Star):
         self.target_user_list = set()
         self.sub_admin_list = set()
 
-    async def initialize(self):
-        config_data = self.config
-        self.bad_words = config_data.get("bad_words", [])
-        spam_config = config_data.get("spam_config", {})
-        admin_config = config_data.get("admin_config", {})
+async def initialize(self):
+    config_data = self.config
+    self.bad_words = config_data.get("bad_words", [])
+    spam_config = config_data.get("spam_config", {})
+    admin_config = config_data.get("admin_config", {})
 
-        self.spam_count = spam_config.get("spam_count", 5)
-        self.spam_interval = spam_config.get("spam_interval", 3)
-        self.spam_ban_duration = spam_config.get("spam_ban_duration", 60)
+    self.spam_count = spam_config.get("spam_count", 5)
+    self.spam_interval = spam_config.get("spam_interval", 3)
+    self.spam_ban_duration = spam_config.get("spam_ban_duration", 60)
 
-        self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
-        self.kick_black_list = set(admin_config.get("kick_black_list", []))
-        self.target_user_list = set(admin_config.get("target_user_list", []))
+    self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
+    self.kick_black_list = set(admin_config.get("kick_black_list", []))
+    self.target_user_list = set(admin_config.get("target_user_list", []))
 
-        self.recall_links = admin_config.get("recall_links", False)
-        self.recall_cards = admin_config.get("recall_cards", False)
-        self.recall_numbers = admin_config.get("recall_numbers", False)
+    self.recall_links = admin_config.get("recall_links", False)
+    self.recall_cards = admin_config.get("recall_cards", False)
+    self.recall_numbers = admin_config.get("recall_numbers", False)
 
-        self.save_json_data()
+    self.save_json_data()
 
-        self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
-        self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
+    self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
+    self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
 
-        logger.info(f"敏感词列表: {self.bad_words}")
-        logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
-        logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list}")
+    # ===== 新增：读取 zd.txt 自动回复内容 =====
+    self.auto_reply_map = {}
+    try:
+        with open('zd.txt', 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or '-' not in line:
+                    continue
+                key, value = line.split('-', 1)
+                self.auto_reply_map[key.strip()] = value.strip()
+        logger.info(f"已加载自动回复关键词: {self.auto_reply_map}")
+    except FileNotFoundError:
+        logger.warning("未找到 zd.txt 文件，自动回复功能将不可用")
+
+    logger.info(f"敏感词列表: {self.bad_words}")
+    logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
+    logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list}")
 
     def save_json_data(self):
         data = {
@@ -67,12 +81,19 @@ async def auto_recall(self, event: AstrMessageEvent):
     group_id = event.get_group_id()
     sender_id = event.get_sender_id()
 
-    # ===== 新增：关键词自动回复（模糊匹配） =====
-    auto_reply_map = {
-        "早上好": "早上好呀！",
-        "晚上好": "晚上好呀！",
-        "你好": "你好呀！",
-    }
+    # ===== 新增：从 zd.txt 读取关键词自动回复（模糊匹配） =====
+    auto_reply_map = {}
+    try:
+        with open('zd.txt', 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or '-' not in line:
+                    continue
+                key, value = line.split('-', 1)
+                auto_reply_map[key.strip()] = value.strip()
+    except FileNotFoundError:
+        logger.warning("未找到 zd.txt，自动回复功能不可用")
+
     for key, reply in auto_reply_map.items():
         if key in message_str:
             await event.bot.send_group_msg(group_id=int(group_id), message=reply)
@@ -145,20 +166,6 @@ async def auto_recall(self, event: AstrMessageEvent):
 
     await self.handle_commands(event)
 
-    @filter.event_message_type(EventMessageType.ALL)
-    async def handle_group_increase(self, event: AstrMessageEvent):
-        if getattr(event.message_obj, 'notice_type', None) != 'group_increase':
-            return
-
-        group_id = event.get_group_id()
-        user_id = event.message_obj.user_id
-
-        if str(user_id) in self.kick_black_list:
-            try:
-                await event.bot.set_group_kick(group_id=int(group_id), user_id=int(user_id))
-                await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {user_id}，已踢出并处理！")
-            except Exception as e:
-                logger.error(f"踢出黑名单用户 {user_id} 失败: {e}")
 
     async def handle_commands(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
