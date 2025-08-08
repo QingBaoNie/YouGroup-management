@@ -1,5 +1,5 @@
 name: susceptible
-version: 1.1.6
+version: 1.1.7
 author: Qing
 description: 敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)
 repo: https://github.com/QingBaoNie/Cesn
