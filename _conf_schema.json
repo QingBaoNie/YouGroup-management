@@ -59,6 +59,15 @@
         "hint": "对特定用户执行定向操作，如静默撤回发言",
         "default": []
       },
+      "whitelist": {
+        "description": "白名单列表",
+        "type": "list",
+        "items": {
+          "type": "string"
+        },
+        "hint": "白名单用户将跳过违禁词/广告/卡片/号码/针对撤回，但仍会触发刷屏检测",
+        "default": []
+      },
       "recall_links": {
         "description": "是否开启链接撤回",
         "type": "bool",
