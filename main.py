@@ -9,6 +9,7 @@ from astrbot import logger
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import filter
 from astrbot.core.star.filter.event_message_type import EventMessageType
+from astrbot.core.star.filter.event import event as any_event  # <<< 新增：万能事件装饰器导入
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
 
 
@@ -104,7 +105,7 @@ class AutoRecallKeywordPlugin(Star):
             return template
 
     # ===== 新增：监听所有事件，捕获入群通知 =====
-    @filter.event()
+    @any_event()  # <<< 替换了原来的 @filter.event()
     async def on_any_event(self, event: AstrMessageEvent):
         """
         通过 notice_type == 'group_increase' 判断新人入群。
