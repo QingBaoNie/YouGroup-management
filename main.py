@@ -277,7 +277,7 @@ class AutoRecallKeywordPlugin(Star):
             try:
                 resp = await event.bot.send_group_msg(
                     group_id=int(group_id),
-                    message="你配指挥我吗？只有本群群主/管理员可用。"
+                    message="你配指挥我吗？"
                 )
                 if isinstance(resp, dict) and "message_id" in resp:
                     asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=10))
