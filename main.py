@@ -12,7 +12,7 @@ from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
 
 
-@register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群)", "1.2.0", "https://github.com/QingBaoNie/Cesn")
+@register("YouGroup-management", "You", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群)", "1.2.0", "https://github.com/QingBaoNie/YouGroup-management")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config):
         super().__init__(context)
