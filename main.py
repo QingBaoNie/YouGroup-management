@@ -22,7 +22,13 @@ class AutoRecallKeywordPlugin(Star):
         self.kick_black_list = set()
         self.target_user_list = set()
         self.sub_admin_list = set()
-        self.whitelist = set()  # <<< 新增：白名单
+        self.whitelist = set()  # 白名单
+
+        # ===== 新增：入群欢迎配置（默认关闭）=====
+        self.welcome_enabled = False
+        self.welcome_groups = set()
+        self.welcome_template = "欢迎 {name} 加入 {group} ~"
+        self.welcome_autodel = 0  # 秒；0 表示不自动撤回
 
     async def initialize(self):
         config_data = self.config
@@ -37,11 +43,19 @@ class AutoRecallKeywordPlugin(Star):
         self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
         self.kick_black_list = set(admin_config.get("kick_black_list", []))
         self.target_user_list = set(admin_config.get("target_user_list", []))
-        self.whitelist = set(admin_config.get("whitelist", []))  # <<< 新增：从配置加载白名单
+        self.whitelist = set(admin_config.get("whitelist", []))  # 从配置加载白名单
 
         self.recall_links = admin_config.get("recall_links", False)
         self.recall_cards = admin_config.get("recall_cards", False)
         self.recall_numbers = admin_config.get("recall_numbers", False)
+
+        # ===== 新增：读取入群欢迎配置 =====
+        welcome_cfg = admin_config.get("welcome", {})
+        self.welcome_enabled = bool(welcome_cfg.get("enabled", False))
+        # 仅这些群号生效（字符串存储）
+        self.welcome_groups = set(str(x) for x in welcome_cfg.get("groups", []))
+        self.welcome_template = welcome_cfg.get("template", "欢迎 {name} 加入 {group} ~")
+        self.welcome_autodel = int(welcome_cfg.get("auto_delete_seconds", 0))
 
         self.save_json_data()
 
@@ -51,13 +65,14 @@ class AutoRecallKeywordPlugin(Star):
         logger.info(f"敏感词列表: {self.bad_words}")
         logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
         logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list} 白名单: {self.whitelist}")
+        logger.info(f"入群欢迎: enabled={self.welcome_enabled} groups={self.welcome_groups or '[]'} autodel={self.welcome_autodel}s")
 
     def save_json_data(self):
         data = {
             'kick_black_list': list(self.kick_black_list),
             'target_user_list': list(self.target_user_list),
             'sub_admin_list': list(self.sub_admin_list),
-            'whitelist': list(self.whitelist),  # <<< 新增：持久化白名单
+            'whitelist': list(self.whitelist),  # 持久化白名单
         }
         with open('cesn_data.json', 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -71,6 +86,92 @@ class AutoRecallKeywordPlugin(Star):
             logger.debug(f"已自动撤回 message_id={message_id}")
         except Exception as e:
             logger.error(f"定时撤回失败 message_id={message_id}: {e}")
+
+    # ===== 新增：欢迎模板渲染 =====
+    def _render_welcome(self, template: str, payload: dict) -> str:
+        """
+        可用变量：
+          {name}  新人显示名（群名片优先，次选昵称，最后QQ号）
+          {qq}    新人QQ号
+          {group} 群名称
+          {group_id} 群号
+          {time}  当前时间（本地）
+        """
+        try:
+            return template.format(**payload)
+        except Exception as e:
+            logger.error(f"欢迎模板渲染失败，将使用原模板。错误: {e}")
+            return template
+
+    # ===== 新增：监听所有事件，捕获入群通知 =====
+    @filter.event()
+    async def on_any_event(self, event: AstrMessageEvent):
+        """
+        通过 notice_type == 'group_increase' 判断新人入群。
+        仅当：
+          1) 开关开启；
+          2) 群号在配置的 groups 列表中（列表为空则不在任何群启用）；
+          3) 能拿到新人 user_id；
+        才会发送欢迎消息。
+        """
+        try:
+            notice_type = getattr(event.message_obj, "notice_type", "")
+            if notice_type != "group_increase":
+                return
+
+            group_id = str(event.get_group_id())
+
+            if not self.welcome_enabled:
+                return
+            if self.welcome_groups and (group_id not in self.welcome_groups):
+                return
+
+            new_user_id = getattr(event.message_obj, "user_id", None)
+            if not new_user_id:
+                logger.error("入群欢迎：未获取到 user_id，跳过。")
+                return
+
+            # 获取新人名片/昵称
+            display_name = str(new_user_id)
+            try:
+                info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(new_user_id))
+                display_name = info.get("card") or info.get("nickname") or str(new_user_id)
+            except Exception as e:
+                logger.error(f"获取新人资料失败：{e}")
+
+            # 获取群名称
+            group_name = group_id
+            try:
+                ginfo = await event.bot.get_group_info(group_id=int(group_id))
+                group_name = ginfo.get("group_name", group_id)
+            except Exception as e:
+                logger.error(f"获取群资料失败：{e}")
+
+            payload = {
+                "name": display_name,
+                "qq": str(new_user_id),
+                "group": group_name,
+                "group_id": group_id,
+                "time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+            }
+            text = self._render_welcome(self.welcome_template, payload)
+
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 入群欢迎")
+
+            # @新人 + 欢迎文本
+            message_segments = [
+                {"type": "At", "data": {"qq": str(new_user_id)}},
+                {"type": "text", "data": {"text": f" {text}"}}
+            ]
+            resp = await event.bot.send_group_msg(group_id=int(group_id), message=message_segments)
+
+            # 自动撤回（如配置了）
+            if self.welcome_autodel and isinstance(resp, dict) and "message_id" in resp:
+                asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=self.welcome_autodel))
+
+        except Exception as e:
+            logger.error(f"入群欢迎处理异常：{e}")
 
     # ===== 权限工具 =====
     async def _get_member_role(self, event: AstrMessageEvent, group_id: int, user_id: int) -> str:
@@ -116,7 +217,7 @@ class AutoRecallKeywordPlugin(Star):
             "禁言", "解禁", "解言", "踢黑", "解黑",
             "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
             "全体禁言", "全体解言",
-            "加白", "移白", "白名单列表",  # <<< 新增：白名单相关指令
+            "加白", "移白", "白名单列表",
         )
         if message_str.startswith(command_keywords):
             # 仅群主/管理员/（可选）子管理员可执行
@@ -317,7 +418,7 @@ class AutoRecallKeywordPlugin(Star):
                 logger.error(f"关闭全体禁言失败: {e}")
             return
 
-        if msg.startswith("白名单列表"):  # <<< 新增：查看白名单
+        if msg.startswith("白名单列表"):  # 查看白名单
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 白名单列表")
             items = sorted(self.whitelist, key=lambda x: int(x))
