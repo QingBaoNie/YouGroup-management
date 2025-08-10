@@ -11,6 +11,25 @@ from astrbot.api.event import filter
 from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
 
+# ===== 兼容：自动解析可用的「通知」事件枚举 =====
+_NOTICE_CANDIDATES = [
+    "NOTICE",           # 常见
+    "GROUP_NOTICE",     # 一些构建
+    "NOTICE_EVENT",     # 一些构建
+    "EVENT",            # 泛型
+    "ANY", "ALL",       # 通配
+]
+for _name in _NOTICE_CANDIDATES:
+    if hasattr(EventMessageType, _name):
+        NOTICE_ENUM = getattr(EventMessageType, _name)
+        logger.info(f"[cesn] 使用通知枚举: EventMessageType.{_name}")
+        break
+else:
+    # 真找不到就兜底：用 GROUP_MESSAGE（欢迎可能不触发，但插件能加载）
+    NOTICE_ENUM = getattr(EventMessageType, "GROUP_MESSAGE")
+    logger.warning("[cesn] 未找到通知枚举，临时使用 GROUP_MESSAGE 兜底（入群欢迎可能不触发）。")
+# ===== 兼容块结束 =====
+
 
 @register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群)", "1.2.0", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
@@ -103,19 +122,18 @@ class AutoRecallKeywordPlugin(Star):
             logger.error(f"欢迎模板渲染失败，将使用原模板。错误: {e}")
             return template
 
-    # ===== 新增：监听所有事件，捕获入群通知 =====
-    @filter.event_message_type(EventMessageType.NOTICE)
+    # ===== 新增：监听通知事件，捕获入群 =====
+    @filter.event_message_type(NOTICE_ENUM)
     async def on_any_event(self, event: AstrMessageEvent):
         """
         通过 notice_type == 'group_increase' 判断新人入群。
-        仅当：
+        条件：
           1) 开关开启；
-          2) 群号在配置的 groups 列表中（列表为空则不在任何群启用）；
+          2) 群号在配置的 groups 列表中（为空则不启用）；
           3) 能拿到新人 user_id；
-        才会发送欢迎消息。
         """
         try:
-            notice_type = getattr(event.message_obj, "notice_type", "")
+            notice_type = getattr(event.message_obj, "notice_type", "") or getattr(event, "notice_type", "")
             if notice_type != "group_increase":
                 return
 
