@@ -116,7 +116,7 @@ class AutoRecallKeywordPlugin(Star):
             "禁言", "解禁", "解言", "踢黑", "解黑",
             "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
             "全体禁言", "全体解言",
-            "加白", "踢白", "白名单列表",  # <<< 新增：白名单相关指令
+            "加白", "移白", "白名单列表",  # <<< 新增：白名单相关指令
         )
         if message_str.startswith(command_keywords):
             # 仅群主/管理员/（可选）子管理员可执行
@@ -433,7 +433,7 @@ class AutoRecallKeywordPlugin(Star):
 
         elif msg.startswith("移白"):
             if hasattr(event, "mark_action"):
-                event.mark_action("敏感词插件 - 踢白")
+                event.mark_action("敏感词插件 - 移白")
             self.whitelist.discard(target_id)
             self.save_json_data()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移出白名单")
