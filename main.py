@@ -22,6 +22,7 @@ class AutoRecallKeywordPlugin(Star):
         self.kick_black_list = set()
         self.target_user_list = set()
         self.sub_admin_list = set()
+        self.whitelist = set()  # <<< 新增：白名单
 
     async def initialize(self):
         config_data = self.config
@@ -36,6 +37,7 @@ class AutoRecallKeywordPlugin(Star):
         self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
         self.kick_black_list = set(admin_config.get("kick_black_list", []))
         self.target_user_list = set(admin_config.get("target_user_list", []))
+        self.whitelist = set(admin_config.get("whitelist", []))  # <<< 新增：从配置加载白名单
 
         self.recall_links = admin_config.get("recall_links", False)
         self.recall_cards = admin_config.get("recall_cards", False)
@@ -48,13 +50,14 @@ class AutoRecallKeywordPlugin(Star):
 
         logger.info(f"敏感词列表: {self.bad_words}")
         logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
-        logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list}")
+        logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list} 白名单: {self.whitelist}")
 
     def save_json_data(self):
         data = {
             'kick_black_list': list(self.kick_black_list),
             'target_user_list': list(self.target_user_list),
-            'sub_admin_list': list(self.sub_admin_list)
+            'sub_admin_list': list(self.sub_admin_list),
+            'whitelist': list(self.whitelist),  # <<< 新增：持久化白名单
         }
         with open('cesn_data.json', 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -112,7 +115,8 @@ class AutoRecallKeywordPlugin(Star):
         command_keywords = (
             "禁言", "解禁", "解言", "踢黑", "解黑",
             "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
-            "全体禁言", "全体解言"   # ← 新增
+            "全体禁言", "全体解言",
+            "加白", "踢白", "白名单列表",  # <<< 新增：白名单相关指令
         )
         if message_str.startswith(command_keywords):
             # 仅群主/管理员/（可选）子管理员可执行
@@ -143,7 +147,7 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
 
-        # 3. 黑名单处理
+        # 3. 黑名单处理（优先生效，不受白名单影响）
         if str(sender_id) in self.kick_black_list:
             await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
             await event.bot.send_group_msg(
@@ -152,26 +156,32 @@ class AutoRecallKeywordPlugin(Star):
             )
             return
 
-        # 4. 针对名单处理
-        if str(sender_id) in self.target_user_list:
+        # 3.5 白名单：跳过关键词/链接/卡片/号码/针对名单撤回，但保留刷屏检测
+        is_whitelisted = str(sender_id) in self.whitelist
+        if is_whitelisted:
+            logger.debug(f"{sender_id} 在白名单中：跳过违禁词/广告/卡片/号码/针对撤回，仅保留刷屏检测")
+
+        # 4. 针对名单处理（白名单覆盖针对）
+        if not is_whitelisted and (str(sender_id) in self.target_user_list):
             await event.bot.delete_msg(message_id=message_id)
-            logger.info(f"静默撤回 {sender_id} 的消息")
+            logger.info(f"静默撤回 {sender_id} 的消息（针对名单）")
             return
 
         # 5. 关键词检测
-        for word in self.bad_words:
-            if word and word in message_str:
-                await self.try_recall(event, message_id, group_id, sender_id)
-                return
+        if not is_whitelisted:
+            for word in self.bad_words:
+                if word and word in message_str:
+                    await self.try_recall(event, message_id, group_id, sender_id)
+                    return
 
         # 6. 链接检测
-        if self.recall_links and ("http://" in message_str or "https://" in message_str):
+        if (not is_whitelisted) and self.recall_links and ("http://" in message_str or "https://" in message_str):
             await self.try_recall(event, message_id, group_id, sender_id)
             logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
             return
 
         # 7. 卡片消息检测
-        if self.recall_cards:
+        if (not is_whitelisted) and self.recall_cards:
             for segment in getattr(event.message_obj, 'message', []):
                 seg_type = getattr(segment, 'type', '')
                 if seg_type in ['Share', 'Card', 'Contact', 'Json', 'Xml', 'share', 'json', 'xml', 'contact']:
@@ -180,7 +190,7 @@ class AutoRecallKeywordPlugin(Star):
                     return
 
         # 8. 号码检测
-        if self.recall_numbers:
+        if (not is_whitelisted) and self.recall_numbers:
             clean_msg = re.sub(r"\[At:\d+\]", "", message_str)
             clean_msg = re.sub(r"@\S+\(\d+\)", "", clean_msg)
             clean_msg = clean_msg.strip()
@@ -190,7 +200,7 @@ class AutoRecallKeywordPlugin(Star):
                 logger.info(f"检测到连续数字，已撤回 {sender_id} 的消息: {message_str}")
                 return
 
-        # 9. 刷屏检测
+        # 9. 刷屏检测（白名单也生效）
         now = time.time()
         key = (group_id, sender_id)
         self.user_message_times[key].append(now)
@@ -307,6 +317,15 @@ class AutoRecallKeywordPlugin(Star):
                 logger.error(f"关闭全体禁言失败: {e}")
             return
 
+        if msg.startswith("白名单列表"):  # <<< 新增：查看白名单
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 白名单列表")
+            items = sorted(self.whitelist, key=lambda x: int(x))
+            count = len(items)
+            text = "以下为 白名单QQ 总计{}\n{}".format(count, ("\n".join(items) if items else "（空）"))
+            await event.bot.send_group_msg(group_id=int(group_id), message=text)
+            return
+
         # ====== 需要@对象的指令 ======
         at_list = []
         for segment in getattr(event.message_obj, 'message', []):
@@ -403,6 +422,21 @@ class AutoRecallKeywordPlugin(Star):
                         logger.error(f"撤回 {target_id} 消息 {msg_data.get('message_id')} 失败: {e}")
 
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 的 {deleted} 条消息")
+
+        # ===== 白名单相关（需要@对象） =====
+        elif msg.startswith("加白"):
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 加白")
+            self.whitelist.add(target_id)
+            self.save_json_data()
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入白名单（仅跳过违禁词/广告/卡片/号码/针对撤回，刷屏仍生效）")
+
+        elif msg.startswith("踢白"):
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 踢白")
+            self.whitelist.discard(target_id)
+            self.save_json_data()
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移出白名单")
 
     async def terminate(self):
         logger.info("AutoRecallKeywordPlugin 插件已被卸载。")
