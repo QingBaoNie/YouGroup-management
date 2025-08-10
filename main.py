@@ -97,7 +97,6 @@ class AutoRecallKeywordPlugin(Star):
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
-        '''这是一个 hello world 指令'''
         # 跳过系统通知
         if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
             return
