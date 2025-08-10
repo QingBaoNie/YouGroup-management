@@ -82,6 +82,35 @@
         "description": "是否开启号码撤回（失效）",
         "type": "bool",
         "default": false
+      },
+      "welcome": {
+        "description": "新人入群欢迎配置（仅以下群号生效）",
+        "type": "object",
+        "items": {
+          "enabled": {
+            "description": "开启新人入群欢迎",
+            "type": "bool",
+            "default": false
+          },
+          "groups": {
+            "description": "启用欢迎的群号白名单（留空表示不在任何群启用）",
+            "type": "list",
+            "items": { "type": "string" },
+            "hint": "填写需要启用欢迎的群号，如：['123456789','987654321']",
+            "default": []
+          },
+          "template": {
+            "description": "欢迎模板（支持变量）",
+            "type": "string",
+            "default": "欢迎 {name} 加入 {group} ~"
+          },
+          "auto_delete_seconds": {
+            "description": "欢迎消息自动撤回秒数（0 不撤回）",
+            "type": "int",
+            "default": 0
+          }
+        },
+        "hint": "可用变量：{name}（新人名片/昵称/QQ）、{qq}（新人QQ）、{group}（群名称）、{group_id}（群号）、{time}（当前时间）"
       }
     }
   }
