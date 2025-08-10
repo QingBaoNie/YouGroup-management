@@ -12,7 +12,7 @@ from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
 
 
-@register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群)", "1.1.9", "https://github.com/QingBaoNie/Cesn")
+@register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群+二维码识别)", "1.2.0", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config):
         super().__init__(context)
@@ -40,6 +40,8 @@ class AutoRecallKeywordPlugin(Star):
         self.recall_links = admin_config.get("recall_links", False)
         self.recall_cards = admin_config.get("recall_cards", False)
         self.recall_numbers = admin_config.get("recall_numbers", False)
+        # 新增：二维码撤回开关
+        self.recall_qrcode = admin_config.get("recall_qrcode", False)
 
         self.save_json_data()
 
@@ -49,6 +51,7 @@ class AutoRecallKeywordPlugin(Star):
         logger.info(f"敏感词列表: {self.bad_words}")
         logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
         logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list}")
+        logger.info(f"功能开关：链接={self.recall_links} 卡片={self.recall_cards} 号码={self.recall_numbers} 二维码={self.recall_qrcode}")
 
     def save_json_data(self):
         data = {
@@ -92,6 +95,67 @@ class AutoRecallKeywordPlugin(Star):
             return True
         return False
 
+    # ===== 二维码检测工具 =====
+    def _detect_qr_in_image(self, file_path: str) -> bool:
+        """
+        返回该图片是否含二维码。
+        优先 OpenCV（cv2），失败则回退 pyzbar+Pillow。
+        任一途径成功检测到即返回 True，否则 False。
+        """
+        # 方案1：OpenCV
+        try:
+            import cv2  # type: ignore
+            img = cv2.imread(file_path)
+            if img is not None:
+                detector = cv2.QRCodeDetector()
+                data, points, _ = detector.detectAndDecode(img)
+                # 有些二维码 decode 失败但能 detect 到 points
+                if (isinstance(data, str) and data) or (points is not None and len(points) > 0):
+                    return True
+        except Exception:
+            pass
+
+        # 方案2：pyzbar + Pillow
+        try:
+            from PIL import Image  # type: ignore
+            from pyzbar.pyzbar import decode  # type: ignore
+            im = Image.open(file_path)
+            codes = decode(im)
+            if codes:
+                return True
+        except Exception:
+            pass
+
+        return False
+
+    async def _segment_has_qr(self, event: AstrMessageEvent, segment) -> bool:
+        """
+        给定一个图片消息段，判断是否包含二维码。
+        通过 get_image(file) 拿到本地路径，在线程池中做检测，避免阻塞事件循环。
+        """
+        file_id = getattr(segment, 'file', None)
+        # 兼容 data 结构
+        if not file_id and hasattr(segment, 'data'):
+            file_id = getattr(segment.data, "get", lambda k, d=None: None)("file", None) if hasattr(segment.data, "get") else None
+
+        if not file_id:
+            return False
+
+        try:
+            info = await event.bot.get_image(file=file_id)  # OneBot: 返回 { "file": "/path/to/image" }
+            local_path = info.get("file")
+            if not local_path:
+                return False
+        except Exception as e:
+            logger.error(f"get_image 失败 file={file_id}: {e}")
+            return False
+
+        try:
+            return await asyncio.to_thread(self._detect_qr_in_image, local_path)
+        except Exception as e:
+            logger.error(f"二维码检测线程异常: {e}")
+            return False
+
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
         # 跳过系统通知
@@ -112,7 +176,7 @@ class AutoRecallKeywordPlugin(Star):
         command_keywords = (
             "禁言", "解禁", "解言", "踢黑", "解黑",
             "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
-            "全体禁言", "全体解言"   # ← 新增
+            "全体禁言", "全体解言"
         )
         if message_str.startswith(command_keywords):
             # 仅群主/管理员/（可选）子管理员可执行
@@ -178,6 +242,23 @@ class AutoRecallKeywordPlugin(Star):
                     await self.try_recall(event, message_id, group_id, sender_id)
                     logger.info(f"检测到卡片消息，已撤回 {sender_id} 的消息")
                     return
+
+        # 7.5 二维码图片检测（仅当开启）
+        if self.recall_qrcode:
+            for segment in getattr(event.message_obj, 'message', []):
+                seg_type = getattr(segment, 'type', '')
+                if seg_type in ['image', 'Image', 'image_url', 'ImageUrl', 'imageFile', 'ImageFile']:
+                    try:
+                        has_qr = await self._segment_has_qr(event, segment)
+                    except Exception as e:
+                        logger.error(f"二维码检测失败（忽略此图片）：{e}")
+                        has_qr = False
+                    if has_qr:
+                        if hasattr(event, "mark_action"):
+                            event.mark_action("敏感词插件 - 二维码撤回")
+                        await self.try_recall(event, message_id, group_id, sender_id)
+                        logger.info(f"检测到二维码图片，已撤回 {sender_id} 的消息")
+                        return
 
         # 8. 号码检测
         if self.recall_numbers:
