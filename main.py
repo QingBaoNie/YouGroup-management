@@ -429,7 +429,7 @@ class AutoRecallKeywordPlugin(Star):
                 event.mark_action("敏感词插件 - 加白")
             self.whitelist.add(target_id)
             self.save_json_data()
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入白名单（仅跳过违禁词/广告/卡片/号码/针对撤回，刷屏仍生效）")
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入白名单（违禁词/广告/卡片/号码/针对将不撤回，刷屏仍生效）")
 
         elif msg.startswith("移白"):
             if hasattr(event, "mark_action"):
