@@ -12,7 +12,7 @@ from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
 
 
-@register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群)", "1.1.7", "https://github.com/QingBaoNie/Cesn")
+@register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群)", "1.1.9", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config):
         super().__init__(context)
@@ -69,7 +69,7 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"定时撤回失败 message_id={message_id}: {e}")
 
-    # ===== 新增：权限工具 =====
+    # ===== 权限工具 =====
     async def _get_member_role(self, event: AstrMessageEvent, group_id: int, user_id: int) -> str:
         """获取成员在群内的角色：owner/admin/member。失败时按member处理。"""
         try:
@@ -108,10 +108,11 @@ class AutoRecallKeywordPlugin(Star):
             await self.handle_check_common_groups(event)
             return
 
-        # 1. 群管命令识别（需要@对象的命令）
+        # 1. 群管命令识别
         command_keywords = (
             "禁言", "解禁", "解言", "踢黑", "解黑",
-            "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回"
+            "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
+            "全体禁言", "全体解言"   # ← 新增
         )
         if message_str.startswith(command_keywords):
             # 仅群主/管理员/（可选）子管理员可执行
@@ -285,6 +286,28 @@ class AutoRecallKeywordPlugin(Star):
                 logger.error(f"发送无权限提示失败: {e}")
             return
 
+        # ====== 不需要@对象的群级指令（优先处理）======
+        if msg.startswith("全体禁言"):
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 全体禁言")
+            try:
+                await event.bot.set_group_whole_ban(group_id=int(group_id), enable=True)
+                await event.bot.send_group_msg(group_id=int(group_id), message="已开启全体禁言")
+            except Exception as e:
+                logger.error(f"开启全体禁言失败: {e}")
+            return
+
+        if msg.startswith("全体解言"):
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 全体解言")
+            try:
+                await event.bot.set_group_whole_ban(group_id=int(group_id), enable=False)
+                await event.bot.send_group_msg(group_id=int(group_id), message="已关闭全体禁言")
+            except Exception as e:
+                logger.error(f"关闭全体禁言失败: {e}")
+            return
+
+        # ====== 需要@对象的指令 ======
         at_list = []
         for segment in getattr(event.message_obj, 'message', []):
             if getattr(segment, 'type', '') == 'At':
