@@ -3,7 +3,12 @@ import json
 import re
 import urllib.parse
 import asyncio
+import os
+import base64
+import tempfile
 from collections import defaultdict, deque
+
+import aiohttp
 
 from astrbot import logger
 from astrbot.api.star import Context, Star, register
@@ -12,7 +17,7 @@ from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
 
 
-@register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群+二维码识别)", "1.2.0", "https://github.com/QingBaoNie/Cesn")
+@register("susceptible", "Qing", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群+二维码识别)", "1.2.2", "https://github.com/QingBaoNie/Cesn")
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config):
         super().__init__(context)
@@ -100,7 +105,6 @@ class AutoRecallKeywordPlugin(Star):
                     return True
         except Exception:
             pass
-
         # 方案2：pyzbar + Pillow
         try:
             from PIL import Image  # type: ignore
@@ -111,12 +115,44 @@ class AutoRecallKeywordPlugin(Star):
                 return True
         except Exception:
             pass
-
         return False
+
+    async def _download_to_temp(self, url_or_b64: str) -> str | None:
+        """把 http(s) 或 base64://... 存到临时文件，返回路径"""
+        try:
+            # base64://
+            if url_or_b64.startswith("base64://"):
+                raw = url_or_b64[len("base64://"):]
+                data = base64.b64decode(raw)
+                fd, path = tempfile.mkstemp(prefix="qr_", suffix=".png")
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                return path
+
+            # http(s)://
+            if url_or_b64.startswith("http://") or url_or_b64.startswith("https://"):
+                fd, path = tempfile.mkstemp(prefix="qr_", suffix=".jpg")
+                os.close(fd)
+                async with aiohttp.ClientSession() as sess:
+                    async with sess.get(url_or_b64, timeout=15) as resp:
+                        if resp.status == 200:
+                            with open(path, "wb") as f:
+                                f.write(await resp.read())
+                            return path
+                        logger.debug("[二维码] 下载失败 url=%s status=%s", url_or_b64, resp.status)
+                return None
+        except Exception as e:
+            logger.error(f"[二维码] 临时文件生成/下载失败: {e}")
+            return None
+
+        return None
 
     async def _segment_has_qr(self, event: AstrMessageEvent, segment) -> bool:
         """
-        兼容多种消息段结构，取到 file/url 后用 get_image 获取本地缓存路径再检测
+        兼容多种消息段结构，三路获取图片：
+        1) get_image(file=...) -> 本地缓存
+        2) file/url 是 http(s) -> 下载
+        3) base64://... -> 解码
         """
         file_id = None
         seg_type = ""
@@ -142,25 +178,42 @@ class AutoRecallKeywordPlugin(Star):
             logger.debug("[二维码] 未获取到图片file/url，段类型=%s，内容(截断)=%s", seg_type, str(segment)[:160])
             return False
 
+        # 优先尝试 get_image
+        local_path = None
         try:
-            info = await event.bot.get_image(file=file_id)  # {"file": "/path/to/cache.jpg"}
+            info = await event.bot.get_image(file=file_id)  # {"file": "/path/to/cache.jpg"} 或报错
             local_path = (info or {}).get("file")
-            if not local_path:
-                logger.debug("[二维码] get_image 返回空路径 file=%s info=%s", file_id, info)
-                return False
+            if local_path:
+                logger.debug("[二维码] 通过 get_image 拿到本地路径: %s", local_path)
         except Exception as e:
-            logger.error(f"[二维码] get_image 失败 file={file_id}: {e}")
+            logger.debug(f"[二维码] get_image 失败 file={file_id}: {e}")
+
+        # 兜底：URL 或 base64
+        if not local_path:
+            tmp = await self._download_to_temp(file_id)
+            if tmp:
+                local_path = tmp
+                logger.debug("[二维码] 通过下载/解码获得临时文件: %s", local_path)
+
+        if not local_path:
+            logger.debug("[二维码] 无法取得图片本地路径，file_id=%s", file_id)
             return False
 
         try:
-            return await asyncio.to_thread(self._detect_qr_in_image, local_path)
+            result = await asyncio.to_thread(self._detect_qr_in_image, local_path)
+            # 临时文件清理（get_image 的缓存不删）
+            if local_path.startswith(os.path.join(tempfile.gettempdir(), "qr_")) and os.path.exists(local_path):
+                try:
+                    os.remove(local_path)
+                except Exception:
+                    pass
+            return result
         except Exception as e:
             logger.error(f"[二维码] 检测线程异常: {e}")
             return False
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
-        # 跳过系统通知
         if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
             return
 
@@ -169,12 +222,12 @@ class AutoRecallKeywordPlugin(Star):
         message_str = event.message_str.strip()
         message_id = event.message_obj.message_id
 
-        # === 查共群（对所有人开放，不需@）===
+        # 查共群
         if message_str.startswith("查共群"):
             await self.handle_check_common_groups(event)
             return
 
-        # 1. 群管命令识别
+        # 群管命令识别
         command_keywords = (
             "禁言", "解禁", "解言", "踢黑", "解黑",
             "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
@@ -192,7 +245,7 @@ class AutoRecallKeywordPlugin(Star):
             await self.handle_commands(event)
             return
 
-        # 2. 非命令消息 → 群主/管理员跳过撤回机制
+        # 群主/管理员跳过撤回检测
         try:
             member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
             role = member_info.get("role", "member")
@@ -202,31 +255,31 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
 
-        # 3. 黑名单处理
+        # 黑名单
         if str(sender_id) in self.kick_black_list:
             await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
             await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
             return
 
-        # 4. 针对名单处理
+        # 针对名单
         if str(sender_id) in self.target_user_list:
             await event.bot.delete_msg(message_id=message_id)
             logger.info(f"静默撤回 {sender_id} 的消息")
             return
 
-        # 5. 关键词检测
+        # 关键词
         for word in self.bad_words:
             if word and word in message_str:
                 await self.try_recall(event, message_id, group_id, sender_id)
                 return
 
-        # 6. 链接检测
+        # 链接
         if self.recall_links and ("http://" in message_str or "https://" in message_str):
             await self.try_recall(event, message_id, group_id, sender_id)
             logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
             return
 
-        # 7. 卡片消息检测
+        # 卡片
         if self.recall_cards:
             for segment in getattr(event.message_obj, 'message', []):
                 seg_type = getattr(segment, 'type', '')
@@ -235,7 +288,7 @@ class AutoRecallKeywordPlugin(Star):
                     logger.info(f"检测到卡片消息，已撤回 {sender_id} 的消息")
                     return
 
-        # 7.5 二维码图片检测（仅当开启）
+        # 二维码图片（开关）
         if self.recall_qrcode:
             for seg in getattr(event.message_obj, 'message', []):
                 seg_type = str(getattr(seg, 'type', seg.get('type') if isinstance(seg, dict) else '')).lower()
@@ -245,7 +298,6 @@ class AutoRecallKeywordPlugin(Star):
                     except Exception as e:
                         logger.error(f"[二维码] 检测失败（忽略此图片）：{e}")
                         has_qr = False
-
                     if has_qr:
                         if hasattr(event, "mark_action"):
                             event.mark_action("敏感词插件 - 二维码撤回")
@@ -253,7 +305,7 @@ class AutoRecallKeywordPlugin(Star):
                         logger.info(f"[二维码] 检测到二维码图片，已撤回 user={sender_id}")
                         return
 
-        # 8. 号码检测
+        # 号码
         if self.recall_numbers:
             clean_msg = re.sub(r"\[At:\d+\]", "", message_str)
             clean_msg = re.sub(r"@\S+\(\d+\)", "", clean_msg)
@@ -264,7 +316,7 @@ class AutoRecallKeywordPlugin(Star):
                 logger.info(f"检测到连续数字，已撤回 {sender_id} 的消息: {message_str}")
                 return
 
-        # 9. 刷屏检测
+        # 刷屏
         now = time.time()
         key = (group_id, sender_id)
         self.user_message_times[key].append(now)
@@ -349,7 +401,7 @@ class AutoRecallKeywordPlugin(Star):
                 logger.error(f"发送无权限提示失败: {e}")
             return
 
-        # ====== 不需要@对象的群级指令 ======
+        # 不需要@对象的群级指令
         if msg.startswith("全体禁言"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 全体禁言")
@@ -370,7 +422,7 @@ class AutoRecallKeywordPlugin(Star):
                 logger.error(f"关闭全体禁言失败: {e}")
             return
 
-        # ====== 需要@对象的指令 ======
+        # 需要@对象的指令
         at_list = []
         for segment in getattr(event.message_obj, 'message', []):
             if getattr(segment, 'type', '') == 'At':
