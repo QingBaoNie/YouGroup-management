@@ -97,6 +97,7 @@ class AutoRecallKeywordPlugin(Star):
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
+        '''这是一个 hello world 指令'''
         # 跳过系统通知
         if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
             return
@@ -343,7 +344,6 @@ class AutoRecallKeywordPlugin(Star):
         if msg.startswith("禁言"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 禁言")
-                '''这是一个 hello world 指令'''
             duration_match = re.search(r"禁言.*?(\d+)?$", msg)
             duration = int(duration_match.group(1)) * 60 if duration_match and duration_match.group(1) else 600
             await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=duration)
