@@ -1,5 +1,5 @@
-name: susceptible
+name: YouGroup-management
 version: 1.2.0
-author: Qing
+author: You
 description: 敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令)
-repo: https://github.com/QingBaoNie/Cesn
+repo: https://github.com/QingBaoNie/YouGroup-management
