@@ -171,8 +171,10 @@ class AutoRecallKeywordPlugin(Star):
         if not is_whitelisted:
             for word in self.bad_words:
                 if word and word in message_str:
+                    logger.info(f"用户:{sender_id} 触发[违禁词: {word}] 已撤回")  # <<< 新增日志
                     await self.try_recall(event, message_id, group_id, sender_id)
                     return
+
 
         # 6. 链接检测
         if (not is_whitelisted) and self.recall_links and ("http://" in message_str or "https://" in message_str):
