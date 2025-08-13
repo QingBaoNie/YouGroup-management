@@ -143,7 +143,7 @@ class AutoRecallKeywordPlugin(Star):
             "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
             "全体禁言", "全体解言",
             "加白", "移白", "白名单列表",
-            "针对列表",  # <<< 新增：针对列表
+            "针对列表",
         )
         if message_str.startswith(command_keywords):
             # 仅群主/管理员/（可选）子管理员可执行
@@ -354,7 +354,7 @@ class AutoRecallKeywordPlugin(Star):
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
 
-        if msg.startswith("针对列表"):  # <<< 新增：查看针对名单
+        if msg.startswith("针对列表"):  # 查看针对名单
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 针对列表")
             items = sorted(self.target_user_list, key=lambda x: int(x))
@@ -399,10 +399,13 @@ class AutoRecallKeywordPlugin(Star):
         elif msg.startswith("踢黑"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 踢黑")
-            self.kick_black_list.add(target_id)
-            self.save_json_data()
-            await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id), reject_add_request=True)
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入踢黑名单并踢出")
+            if target_id in self.kick_black_list:
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已存在黑名单无需踢黑！")
+            else:
+                self.kick_black_list.add(target_id)
+                self.save_json_data()
+                await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id), reject_add_request=True)
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入踢黑名单并踢出")
 
         elif msg.startswith("解黑"):
             if hasattr(event, "mark_action"):
@@ -469,9 +472,12 @@ class AutoRecallKeywordPlugin(Star):
         elif msg.startswith("加白"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 加白")
-            self.whitelist.add(target_id)
-            self.save_json_data()
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入白名单（违禁词/广告/卡片/号码/针对将不撤回，刷屏仍生效）")
+            if target_id in self.whitelist:
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已存在白名单无需加白！")
+            else:
+                self.whitelist.add(target_id)
+                self.save_json_data()
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入白名单（违禁词/广告/卡片/号码/针对将不撤回，刷屏仍生效）")
 
         elif msg.startswith("移白"):
             if hasattr(event, "mark_action"):
