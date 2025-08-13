@@ -72,6 +72,32 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"定时撤回失败 message_id={message_id}: {e}")
 
+    # ===== 工具：判断是否纯文本 =====
+    def _is_pure_text(self, event: AstrMessageEvent, message_str: str) -> bool:
+        """
+        仅当消息完全由 text 段组成时返回 True。
+        优先用段结构判断；若不可用则用字符串标记兜底。
+        """
+        # 1) 使用消息段结构（最稳妥）
+        try:
+            segs = getattr(event.message_obj, 'message', None)
+            if isinstance(segs, list) and len(segs) > 0:
+                for seg in segs:
+                    # 兼容 dict / 对象两种写法
+                    s_type = seg.get("type") if isinstance(seg, dict) else getattr(seg, "type", "")
+                    if s_type not in ("text", "Text", "text_plain"):
+                        return False
+                return True
+        except Exception:
+            pass
+
+        # 2) 基于字符串的兜底判断（日志可见标记）
+        cq_like_markers = (
+            "[CQ:at", "[CQ:reply", "[CQ:image", "[CQ:face", "[CQ:record", "[CQ:video",
+            "[引用消息]", "[At:", "[图片]", "[表情]", "[语音]", "[视频]"
+        )
+        return not any(m in message_str for m in cq_like_markers)
+
     # ===== 权限工具 =====
     async def _get_member_role(self, event: AstrMessageEvent, group_id: int, user_id: int) -> str:
         """获取成员在群内的角色：owner/admin/member。失败时按member处理。"""
@@ -171,10 +197,9 @@ class AutoRecallKeywordPlugin(Star):
         if not is_whitelisted:
             for word in self.bad_words:
                 if word and word in message_str:
-                    logger.info(f"用户:{sender_id} 触发[违禁词: {word}] 已撤回")  # <<< 新增日志
+                    logger.info(f"用户:{sender_id} 触发[违禁词: {word}] 已撤回")
                     await self.try_recall(event, message_id, group_id, sender_id)
                     return
-
 
         # 6. 链接检测
         if (not is_whitelisted) and self.recall_links and ("http://" in message_str or "https://" in message_str):
@@ -191,16 +216,16 @@ class AutoRecallKeywordPlugin(Star):
                     logger.info(f"检测到卡片消息，已撤回 {sender_id} 的消息")
                     return
 
-        # 8. 号码检测
+        # 8. 号码检测（只在纯文本中触发）
         if (not is_whitelisted) and self.recall_numbers:
-            clean_msg = re.sub(r"\[At:\d+\]", "", message_str)
-            clean_msg = re.sub(r"@\S+\(\d+\)", "", clean_msg)
-            clean_msg = clean_msg.strip()
-            match = re.search(r"\d{6,}", clean_msg)
-            if match:
-                await self.try_recall(event, message_id, group_id, sender_id)
-                logger.info(f"检测到连续数字，已撤回 {sender_id} 的消息: {message_str}")
-                return
+            # 不是纯文本就跳过（避免 @ / 引用 被误撤回）
+            if not self._is_pure_text(event, message_str):
+                pass
+            else:
+                if re.search(r"(?<!\d)\d{6,}(?!\d)", message_str):
+                    await self.try_recall(event, message_id, group_id, sender_id)
+                    logger.info(f"检测到连续数字，已撤回 {sender_id} 的消息: {message_str}")
+                    return
 
         # 9. 刷屏检测（白名单也生效）
         now = time.time()
@@ -331,8 +356,13 @@ class AutoRecallKeywordPlugin(Star):
         # ====== 需要@对象的指令 ======
         at_list = []
         for segment in getattr(event.message_obj, 'message', []):
-            if getattr(segment, 'type', '') == 'At':
-                at_list.append(getattr(segment, 'qq', None))
+            seg_type = getattr(segment, 'type', '')
+            if seg_type in ('At', 'at'):
+                # 兼容 dict/对象两种取 qq
+                qq = getattr(segment, 'qq', None)
+                if qq is None and isinstance(segment, dict):
+                    qq = segment.get('data', {}).get('qq') or segment.get('qq')
+                at_list.append(qq)
 
         if not at_list:
             logger.error("未检测到 @目标用户，无法执行该命令")
