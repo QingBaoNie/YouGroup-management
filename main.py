@@ -142,7 +142,8 @@ class AutoRecallKeywordPlugin(Star):
             "禁言", "解禁", "解言", "踢黑", "解黑",
             "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
             "全体禁言", "全体解言",
-            "加白", "移白", "白名单列表",  # <<< 新增：白名单相关指令
+            "加白", "移白", "白名单列表",
+            "针对列表",  # <<< 新增：针对列表
         )
         if message_str.startswith(command_keywords):
             # 仅群主/管理员/（可选）子管理员可执行
@@ -344,12 +345,21 @@ class AutoRecallKeywordPlugin(Star):
                 logger.error(f"关闭全体禁言失败: {e}")
             return
 
-        if msg.startswith("白名单列表"):  # <<< 新增：查看白名单
+        if msg.startswith("白名单列表"):  # 查看白名单
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 白名单列表")
             items = sorted(self.whitelist, key=lambda x: int(x))
             count = len(items)
             text = "以下为 白名单QQ 总计{}\n{}".format(count, ("\n".join(items) if items else "（空）"))
+            await event.bot.send_group_msg(group_id=int(group_id), message=text)
+            return
+
+        if msg.startswith("针对列表"):  # <<< 新增：查看针对名单
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 针对列表")
+            items = sorted(self.target_user_list, key=lambda x: int(x))
+            count = len(items)
+            text = "以下为 针对名单QQ 总计{}\n{}".format(count, ("\n".join(items) if items else "（空）"))
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
 
