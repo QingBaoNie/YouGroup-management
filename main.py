@@ -22,7 +22,7 @@ class AutoRecallKeywordPlugin(Star):
         self.kick_black_list = set()
         self.target_user_list = set()
         self.sub_admin_list = set()
-        self.whitelist = set()  # <<< 新增：白名单
+        self.whitelist = set()  # 白名单
 
     async def initialize(self):
         config_data = self.config
@@ -37,7 +37,7 @@ class AutoRecallKeywordPlugin(Star):
         self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
         self.kick_black_list = set(admin_config.get("kick_black_list", []))
         self.target_user_list = set(admin_config.get("target_user_list", []))
-        self.whitelist = set(admin_config.get("whitelist", []))  # <<< 新增：从配置加载白名单
+        self.whitelist = set(admin_config.get("whitelist", []))  # 从配置加载白名单
 
         self.recall_links = admin_config.get("recall_links", False)
         self.recall_cards = admin_config.get("recall_cards", False)
@@ -57,7 +57,7 @@ class AutoRecallKeywordPlugin(Star):
             'kick_black_list': list(self.kick_black_list),
             'target_user_list': list(self.target_user_list),
             'sub_admin_list': list(self.sub_admin_list),
-            'whitelist': list(self.whitelist),  # <<< 新增：持久化白名单
+            'whitelist': list(self.whitelist),
         }
         with open('cesn_data.json', 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -143,6 +143,7 @@ class AutoRecallKeywordPlugin(Star):
             "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
             "全体禁言", "全体解言",
             "加白", "移白", "白名单列表",
+            "黑名单列表",      # 新增：黑名单列表
             "针对列表",
         )
         if message_str.startswith(command_keywords):
@@ -351,6 +352,15 @@ class AutoRecallKeywordPlugin(Star):
             items = sorted(self.whitelist, key=lambda x: int(x))
             count = len(items)
             text = "以下为 白名单QQ 总计{}\n{}".format(count, ("\n".join(items) if items else "（空）"))
+            await event.bot.send_group_msg(group_id=int(group_id), message=text)
+            return
+
+        if msg.startswith("黑名单列表"):  # 新增：查看黑名单
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 黑名单列表")
+            items = sorted(self.kick_black_list, key=lambda x: int(x))
+            count = len(items)
+            text = "以下为 黑名单QQ 总计{}\n{}".format(count, ("\n".join(items) if items else "（空）"))
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
 
