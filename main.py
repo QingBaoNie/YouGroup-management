@@ -189,7 +189,7 @@ class AutoRecallKeywordPlugin(Star):
         if not is_whitelisted:
             for word in self.bad_words:
                 if word and word in message_str:
-                    _log(f"触发违禁词【{word}】已撤回！")
+                    logger.error(f"触发违禁词【{word}】已撤回！")
                     await self.try_recall(event, message_id, group_id, sender_id)
                     return
 
