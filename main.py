@@ -51,9 +51,19 @@ class AutoRecallKeywordPlugin(Star):
         self.target_user_list = set(admin_config.get("target_user_list", []))
         self.whitelist = set(admin_config.get("whitelist", []))
 
-        self.recall_links = admin_config.get("recall_links", False)
-        self.recall_cards = admin_config.get("recall_cards", False)
-        self.recall_numbers = admin_config.get("recall_numbers", False)
+        # ---- 关键：稳健化布尔解析 ----
+        def _to_bool(v):
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, (int, float)):
+                return v != 0
+            if isinstance(v, str):
+                return v.strip().lower() in {"1", "true", "yes", "on"}
+            return False
+
+        self.recall_links = _to_bool(admin_config.get("recall_links", False))
+        self.recall_cards = _to_bool(admin_config.get("recall_cards", False))
+        self.recall_numbers = _to_bool(admin_config.get("recall_numbers", False))
 
         self.save_json_data()
 
@@ -64,6 +74,7 @@ class AutoRecallKeywordPlugin(Star):
         logger.info(f"自动回复规则: {self.auto_replies}")
         logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
         logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list} 白名单: {self.whitelist}")
+        logger.info(f"撤回配置: links={self.recall_links}, cards={self.recall_cards}, numbers={self.recall_numbers}")
 
     def save_json_data(self):
         data = {
@@ -84,21 +95,52 @@ class AutoRecallKeywordPlugin(Star):
             logger.error(f"定时撤回失败 message_id={message_id}: {e}")
 
     def _is_pure_text(self, event: AstrMessageEvent, message_str: str) -> bool:
+        """
+        只要所有分段都是 text / Text / text_plain / Plain 就认为纯文本。
+        如果拿不到分段，则用字符串里是否含 CQ 标记作兜底。
+        """
         try:
             segs = getattr(event.message_obj, 'message', None)
             if isinstance(segs, list) and segs:
                 for seg in segs:
                     s_type = seg.get("type") if isinstance(seg, dict) else getattr(seg, "type", "")
-                    if s_type not in ("text", "Text", "text_plain"):
+                    s_type = (s_type or "").lower()
+                    if s_type not in ("text", "text_plain", "plain"):
                         return False
                 return True
         except Exception:
             pass
-        cq_like_markers = (
-            "[CQ:at", "[CQ:reply", "[CQ:image", "[CQ:face", "[CQ:record", "[CQ:video",
-            "[引用消息]", "[At:", "[图片]", "[表情]", "[语音]", "[视频]"
-        )
+        cq_like_markers = ("[CQ:", "[引用消息]", "[At:", "[图片]", "[表情]", "[语音]", "[视频]")
         return not any(m in message_str for m in cq_like_markers)
+
+    def _has_at_or_reply(self, event: AstrMessageEvent, message_str: str) -> bool:
+        """检测是否包含 @ 或 回复分段（避免误撤回管理员操作等）"""
+        try:
+            for seg in getattr(event.message_obj, 'message', []):
+                s_type = seg.get("type") if isinstance(seg, dict) else getattr(seg, "type", "")
+                s_type = (s_type or "").lower()
+                if s_type in ("at", "reply"):
+                    return True
+        except Exception:
+            pass
+        return ("[CQ:at" in message_str) or ("[CQ:reply" in message_str)
+
+    def _normalize_for_number_check(self, s: str) -> str:
+        """
+        数字检测前的标准化：
+        1) 全角数字 -> 半角
+        2) 去掉空白/常见分隔符（空格、短横线、点、下划线）
+        3) 去掉常见不可见字符（零宽/功能性）
+        """
+        # 全角数字映射
+        full = "０１２３４５６７８９"
+        trans = {ord(full[i]): ord('0') + i for i in range(10)}
+        s = s.translate(trans)
+        # 移除分隔符
+        s = re.sub(r"[\s\-\._]", "", s)
+        # 去常见不可见字符
+        s = s.replace("\u200b", "").replace("\u2060", "").replace("\u2061", "").replace("\u2062", "").replace("\u2063", "")
+        return s
 
     async def _get_member_role(self, event: AstrMessageEvent, group_id: int, user_id: int) -> str:
         try:
@@ -138,6 +180,7 @@ class AutoRecallKeywordPlugin(Star):
                     except Exception as e:
                         logger.error(f"自动回复失败: {e}")
                     break
+
         # 查共群
         if message_str.startswith("查共群"):
             await self.handle_check_common_groups(event)
@@ -208,15 +251,21 @@ class AutoRecallKeywordPlugin(Star):
                     await self.try_recall(event, message_id, group_id, sender_id)
                     return
 
-        # 8. 号码检测（只在纯文本中触发）
+        # 8. 号码检测（避免 @/引用 消息被误撤回）
         if (not is_whitelisted) and self.recall_numbers:
-            # 不是纯文本就跳过（避免 @ / 引用 被误撤回）
-            if not self._is_pure_text(event, message_str):
-                pass
-            else:
-                if re.search(r"(?<!\d)\d{6,}(?!\d)", message_str):
+            has_at_or_reply = self._has_at_or_reply(event, message_str)
+            # 可选调试日志，定位问题时打开
+            logger.debug(
+                f"num-check debug | gid={group_id} uid={sender_id} "
+                f"whitelisted={is_whitelisted} recall_numbers={self.recall_numbers} "
+                f"has_at_or_reply={has_at_or_reply} msg='{message_str}'"
+            )
+            if not has_at_or_reply:
+                norm = self._normalize_for_number_check(message_str)
+                # 连续6位及以上数字（标准化后判定）
+                if re.search(r"(?<!\d)\d{6,}(?!\d)", norm):
+                    logger.error(f"检测到连续数字，已撤回 {sender_id} 的消息: 原='{message_str}' | 标准化='{norm}'")
                     await self.try_recall(event, message_id, group_id, sender_id)
-                    logger.error(f"检测到连续数字，已撤回 {sender_id} 的消息: {message_str}")
                     return
 
         # 刷屏
@@ -336,7 +385,7 @@ class AutoRecallKeywordPlugin(Star):
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
 
-        if msg.startswith("黑名单列表"):  # 新增：查看黑名单
+        if msg.startswith("黑名单列表"):  # 查看黑名单
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 黑名单列表")
             items = sorted(self.kick_black_list, key=lambda x: int(x))
