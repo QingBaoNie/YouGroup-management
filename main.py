@@ -116,116 +116,127 @@ class AutoRecallKeywordPlugin(Star):
             return True
         return False
 
-    @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
-    async def auto_recall(self, event: AstrMessageEvent):
-        if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
-            return
+@filter.event_message_type(EventMessageType.GROUP_MESSAGE)
+async def auto_recall(self, event: AstrMessageEvent):
+    if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
+        return
 
-        group_id = event.get_group_id()
-        sender_id = event.get_sender_id()
-        message_str = event.message_str.strip()
-        message_id = event.message_obj.message_id
+    group_id = event.get_group_id()
+    sender_id = event.get_sender_id()
+    message_str = event.message_str.strip()
+    message_id = event.message_obj.message_id
 
-        # 自动回复（带冷却）
-        now_time = time.time()
-        last_reply_time = self.auto_reply_last_time.get(group_id, 0)
-        if now_time - last_reply_time >= self.auto_reply_cooldown:
-            for key, reply in self.auto_replies.items():
-                if key in message_str:
-                    try:
-                        await event.bot.send_group_msg(group_id=int(group_id), message=reply)
-                        self.auto_reply_last_time[group_id] = now_time
-                    except Exception as e:
-                        logger.error(f"自动回复失败: {e}")
-                    break
-        # 查共群
-        if message_str.startswith("查共群"):
-            await self.handle_check_common_groups(event)
-            return
+    def _log(msg: str):
+        logger.info(f"[Group:{group_id}] [User:{sender_id}] [MsgID:{message_id}] {msg}")
 
-        # 群管命令
-        command_keywords = (
-            "禁言", "解禁", "解言", "踢黑", "解黑",
-            "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
-            "全体禁言", "全体解言",
-            "加白", "移白", "白名单列表",
-            "黑名单列表", "针对列表",
-        )
-        if message_str.startswith(command_keywords):
-            if not await self._is_operator(event, int(group_id), int(sender_id)):
+    # 自动回复（带冷却）
+    now_time = time.time()
+    last_reply_time = self.auto_reply_last_time.get(group_id, 0)
+    if now_time - last_reply_time >= self.auto_reply_cooldown:
+        for key, reply in self.auto_replies.items():
+            if key in message_str:
                 try:
-                    resp = await event.bot.send_group_msg(group_id=int(group_id), message="你配指挥我吗？")
-                    if isinstance(resp, dict) and "message_id" in resp:
-                        asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=10))
+                    await event.bot.send_group_msg(group_id=int(group_id), message=reply)
+                    self.auto_reply_last_time[group_id] = now_time
+                    _log(f"触发回复关键词【{key}】")
                 except Exception as e:
-                    logger.error(f"发送无权限提示失败: {e}")
-                return
-            await self.handle_commands(event)
+                    logger.error(f"自动回复失败: {e}")
+                break
+
+    # 查共群
+    if message_str.startswith("查共群"):
+        await self.handle_check_common_groups(event)
+        return
+
+    # 群管命令
+    command_keywords = (
+        "禁言", "解禁", "解言", "踢黑", "解黑",
+        "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
+        "全体禁言", "全体解言",
+        "加白", "移白", "白名单列表",
+        "黑名单列表", "针对列表",
+    )
+    if message_str.startswith(command_keywords):
+        if not await self._is_operator(event, int(group_id), int(sender_id)):
+            try:
+                resp = await event.bot.send_group_msg(group_id=int(group_id), message="你配指挥我吗？")
+                if isinstance(resp, dict) and "message_id" in resp:
+                    asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=10))
+            except Exception as e:
+                logger.error(f"发送无权限提示失败: {e}")
             return
+        await self.handle_commands(event)
+        return
 
-        # 群主/管理员跳过撤回
-        try:
-            member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
-            if member_info.get("role", "member") in ("owner", "admin"):
-                return
-        except Exception as e:
-            logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
-
-        # 黑名单
-        if str(sender_id) in self.kick_black_list:
-            await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
+    # 群主/管理员跳过撤回
+    try:
+        member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
+        if member_info.get("role", "member") in ("owner", "admin"):
             return
+    except Exception as e:
+        logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
 
-        # 白名单
-        is_whitelisted = str(sender_id) in self.whitelist
+    # 黑名单
+    if str(sender_id) in self.kick_black_list:
+        await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
+        await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
+        return
 
-        # 针对名单
-        if not is_whitelisted and (str(sender_id) in self.target_user_list):
-            await event.bot.delete_msg(message_id=message_id)
-            return
+    # 白名单
+    is_whitelisted = str(sender_id) in self.whitelist
 
-        # 违禁词
-        if not is_whitelisted:
-            for word in self.bad_words:
-                if word and word in message_str:
-                    await self.try_recall(event, message_id, group_id, sender_id)
-                    return
+    # 针对名单
+    if not is_whitelisted and (str(sender_id) in self.target_user_list):
+        await event.bot.delete_msg(message_id=message_id)
+        _log("对方存在【针对】中，正在撤回！")
+        return
 
-        # 链接
-        if (not is_whitelisted) and self.recall_links and ("http://" in message_str or "https://" in message_str):
-            await self.try_recall(event, message_id, group_id, sender_id)
-            return
-
-        # 卡片
-        if (not is_whitelisted) and self.recall_cards:
-            for segment in getattr(event.message_obj, 'message', []):
-                seg_type = getattr(segment, 'type', '')
-                if seg_type in ['Share', 'Card', 'Contact', 'Json', 'Xml', 'share', 'json', 'xml', 'contact']:
-                    await self.try_recall(event, message_id, group_id, sender_id)
-                    return
-
-        # 号码
-        if (not is_whitelisted) and self.recall_numbers:
-            if self._is_pure_text(event, message_str) and re.search(r"(?<!\d)\d{6,}(?!\d)", message_str):
+    # 违禁词
+    if not is_whitelisted:
+        for word in self.bad_words:
+            if word and word in message_str:
+                _log(f"触发违禁词【{word}】已撤回！")
                 await self.try_recall(event, message_id, group_id, sender_id)
                 return
 
-        # 刷屏
-        now = time.time()
-        key = (group_id, sender_id)
-        self.user_message_times[key].append(now)
-        self.user_message_ids[key].append(message_id)
-        if len(self.user_message_times[key]) == self.spam_count:
-            if now - self.user_message_times[key][0] <= self.spam_interval:
-                await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
-                for msg_id in self.user_message_ids[key]:
-                    try:
-                        await event.bot.delete_msg(message_id=msg_id)
-                    except Exception as e:
-                        logger.error(f"刷屏批量撤回失败: {e}")
-                self.user_message_times[key].clear()
-                self.user_message_ids[key].clear()
+    # 链接
+    if (not is_whitelisted) and self.recall_links and ("http://" in message_str or "https://" in message_str):
+        _log("触发【链接】已撤回！")
+        await self.try_recall(event, message_id, group_id, sender_id)
+        return
+
+    # 卡片
+    if (not is_whitelisted) and self.recall_cards:
+        for segment in getattr(event.message_obj, 'message', []):
+            seg_type = getattr(segment, 'type', '')
+            if seg_type in ['Share', 'Card', 'Contact', 'Json', 'Xml', 'share', 'json', 'xml', 'contact']:
+                _log("触发【卡片】已撤回！")
+                await self.try_recall(event, message_id, group_id, sender_id)
+                return
+
+    # 号码
+    if (not is_whitelisted) and self.recall_numbers:
+        if self._is_pure_text(event, message_str) and re.search(r"(?<!\d)\d{6,}(?!\d)", message_str):
+            _log("触发【号码】已撤回！")
+            await self.try_recall(event, message_id, group_id, sender_id)
+            return
+
+    # 刷屏
+    now = time.time()
+    key = (group_id, sender_id)
+    self.user_message_times[key].append(now)
+    self.user_message_ids[key].append(message_id)
+    if len(self.user_message_times[key]) == self.spam_count:
+        if now - self.user_message_times[key][0] <= self.spam_interval:
+            _log("触发【刷屏】已禁言并批量撤回！")
+            await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
+            for msg_id in self.user_message_ids[key]:
+                try:
+                    await event.bot.delete_msg(message_id=msg_id)
+                except Exception as e:
+                    logger.error(f"刷屏批量撤回失败: {e}")
+            self.user_message_times[key].clear()
+            self.user_message_ids[key].clear()
 
     async def try_recall(self, event: AstrMessageEvent, message_id: str, group_id: int, sender_id: int):
         try:
