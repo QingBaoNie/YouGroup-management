@@ -147,15 +147,21 @@ async def auto_recall(self, event: AstrMessageEvent):
     message_str = event.message_str.strip()
     message_id = event.message_obj.message_id
 
-    # === 自动关键词回复（从配置读取）
-    for key, reply in self.auto_replies.items():
-        if key in message_str:
-            try:
-                await event.bot.send_group_msg(group_id=int(group_id), message=reply)
-            except Exception as e:
-                logger.error(f"自动回复失败: {e}")
-            break  # 匹配到第一个就停止
-    # === 自动关键词回复结束
+    # === 自动关键词回复（从配置读取，带冷却）===
+    now_time = time.time()
+    last_reply_time = self.auto_reply_last_time.get(group_id, 0)
+    if now_time - last_reply_time >= self.auto_reply_cooldown:
+        for key, reply in self.auto_replies.items():
+            if key in message_str:
+                try:
+                    await event.bot.send_group_msg(group_id=int(group_id), message=reply)
+                    self.auto_reply_last_time[group_id] = now_time  # 记录本群上次回复时间
+                except Exception as e:
+                    logger.error(f"自动回复失败: {e}")
+                break  # 匹配到第一个就停止
+    else:
+        logger.debug(f"群 {group_id} 自动回复冷却中，剩余 {int(self.auto_reply_cooldown - (now_time - last_reply_time))} 秒")
+    # === 自动关键词回复结束 ===
 
     # === 查共群（对所有人开放，不需@）===
     if message_str.startswith("查共群"):
