@@ -24,6 +24,11 @@ class AutoRecallKeywordPlugin(Star):
         self.sub_admin_list = set()
         self.whitelist = set()  # 白名单
 
+        # === 自动回复冷却相关 ===
+        self.auto_reply_last_time = {}   # 记录每个群上次自动回复的时间 {group_id: timestamp}
+        self.auto_reply_cooldown = 60    # 冷却时间（秒），默认1分钟
+
+
     async def initialize(self):
         config_data = self.config
         self.bad_words = config_data.get("bad_words", [])
