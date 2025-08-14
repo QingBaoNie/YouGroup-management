@@ -195,6 +195,7 @@ class AutoRecallKeywordPlugin(Star):
 
         # 链接
         if (not is_whitelisted) and self.recall_links and ("http://" in message_str or "https://" in message_str):
+            logger.error(f"触发【链接】已撤回！")
             await self.try_recall(event, message_id, group_id, sender_id)
             return
 
@@ -203,12 +204,14 @@ class AutoRecallKeywordPlugin(Star):
             for segment in getattr(event.message_obj, 'message', []):
                 seg_type = getattr(segment, 'type', '')
                 if seg_type in ['Share', 'Card', 'Contact', 'Json', 'Xml', 'share', 'json', 'xml', 'contact']:
+                    logger.error(f"触发【卡片】已撤回！")
                     await self.try_recall(event, message_id, group_id, sender_id)
                     return
 
         # 号码
         if (not is_whitelisted) and self.recall_numbers:
             if self._is_pure_text(event, message_str) and re.search(r"(?<!\d)\d{6,}(?!\d)", message_str):
+                logger.error(f"触发【号码】已撤回！")
                 await self.try_recall(event, message_id, group_id, sender_id)
                 return
 
@@ -219,6 +222,7 @@ class AutoRecallKeywordPlugin(Star):
         self.user_message_ids[key].append(message_id)
         if len(self.user_message_times[key]) == self.spam_count:
             if now - self.user_message_times[key][0] <= self.spam_interval:
+                logger.error(f"触发【刷屏】已禁言并批量撤回！")
                 await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
                 for msg_id in self.user_message_ids[key]:
                     try:
