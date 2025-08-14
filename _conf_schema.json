@@ -84,5 +84,14 @@
         "default": false
       }
     }
+  },
+  "auto_replies": {
+    "description": "自动关键词回复（格式：关键词-回复内容）",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "hint": "每条用 - 分隔关键词和回复内容，例如：'6-你在6什么?'，'早-早上好阿'",
+    "default": []
   }
 }
