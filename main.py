@@ -132,6 +132,20 @@ class AutoRecallKeywordPlugin(Star):
         message_str = event.message_str.strip()
         message_id = event.message_obj.message_id
 
+        # === 自动关键词回复（新增）
+        auto_replies = {
+            "6": "你在6什么?",
+            "早": "早上好阿"
+        }
+        for key, reply in auto_replies.items():
+            if key in message_str:
+                try:
+                    await event.bot.send_group_msg(group_id=int(group_id), message=reply)
+                except Exception as e:
+                    logger.error(f"自动回复失败: {e}")
+                break  # 匹配到第一个就停止
+        # === 自动关键词回复结束
+
         # === 查共群（对所有人开放，不需@）===
         if message_str.startswith("查共群"):
             await self.handle_check_common_groups(event)
