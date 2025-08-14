@@ -22,12 +22,11 @@ class AutoRecallKeywordPlugin(Star):
         self.kick_black_list = set()
         self.target_user_list = set()
         self.sub_admin_list = set()
-        self.whitelist = set()  # 白名单
+        self.whitelist = set()
 
-        # === 自动回复冷却相关 ===
-        self.auto_reply_last_time = {}   # 记录每个群上次自动回复的时间 {group_id: timestamp}
-        self.auto_reply_cooldown = 60    # 冷却时间（秒），默认1分钟
-
+        # 自动回复冷却
+        self.auto_reply_last_time = {}
+        self.auto_reply_cooldown = 60
 
     async def initialize(self):
         config_data = self.config
@@ -35,7 +34,7 @@ class AutoRecallKeywordPlugin(Star):
         spam_config = config_data.get("spam_config", {})
         admin_config = config_data.get("admin_config", {})
 
-        # 读取自动回复
+        # 自动回复
         auto_replies_config = config_data.get("auto_replies", [])
         self.auto_replies = {}
         for item in auto_replies_config:
@@ -66,7 +65,6 @@ class AutoRecallKeywordPlugin(Star):
         logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
         logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list} 白名单: {self.whitelist}")
 
-
     def save_json_data(self):
         data = {
             'kick_black_list': list(self.kick_black_list),
@@ -79,43 +77,30 @@ class AutoRecallKeywordPlugin(Star):
         logger.info("已保存数据到 cesn_data.json")
 
     async def _auto_delete_after(self, bot, message_id: int, delay: int = 60):
-        """延时撤回消息"""
         try:
             await asyncio.sleep(delay)
             await bot.delete_msg(message_id=message_id)
-            logger.debug(f"已自动撤回 message_id={message_id}")
         except Exception as e:
             logger.error(f"定时撤回失败 message_id={message_id}: {e}")
 
-    # ===== 工具：判断是否纯文本 =====
     def _is_pure_text(self, event: AstrMessageEvent, message_str: str) -> bool:
-        """
-        仅当消息完全由 text 段组成时返回 True。
-        优先用段结构判断；若不可用则用字符串标记兜底。
-        """
-        # 1) 使用消息段结构（最稳妥）
         try:
             segs = getattr(event.message_obj, 'message', None)
-            if isinstance(segs, list) and len(segs) > 0:
+            if isinstance(segs, list) and segs:
                 for seg in segs:
-                    # 兼容 dict / 对象两种写法
                     s_type = seg.get("type") if isinstance(seg, dict) else getattr(seg, "type", "")
                     if s_type not in ("text", "Text", "text_plain"):
                         return False
                 return True
         except Exception:
             pass
-
-        # 2) 基于字符串的兜底判断（日志可见标记）
         cq_like_markers = (
             "[CQ:at", "[CQ:reply", "[CQ:image", "[CQ:face", "[CQ:record", "[CQ:video",
             "[引用消息]", "[At:", "[图片]", "[表情]", "[语音]", "[视频]"
         )
         return not any(m in message_str for m in cq_like_markers)
 
-    # ===== 权限工具 =====
     async def _get_member_role(self, event: AstrMessageEvent, group_id: int, user_id: int) -> str:
-        """获取成员在群内的角色：owner/admin/member。失败时按member处理。"""
         try:
             info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(user_id))
             return info.get("role", "member")
@@ -124,159 +109,123 @@ class AutoRecallKeywordPlugin(Star):
             return "member"
 
     async def _is_operator(self, event: AstrMessageEvent, group_id: int, user_id: int) -> bool:
-        """
-        只有群主/管理员（可选：包含子管理员）可以操作群管命令。
-        如不想放开子管理员，把最后那行对子管理员的判断删掉即可。
-        """
         role = await self._get_member_role(event, group_id, user_id)
         if role in ("owner", "admin"):
             return True
-        # 想禁用子管理员权限，注释/删除下一行
         if str(user_id) in self.sub_admin_list:
             return True
         return False
 
-@filter.event_message_type(EventMessageType.GROUP_MESSAGE)
-async def auto_recall(self, event: AstrMessageEvent):
-    # 跳过系统通知
-    if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
-        return
-
-    group_id = event.get_group_id()
-    sender_id = event.get_sender_id()
-    message_str = event.message_str.strip()
-    message_id = event.message_obj.message_id
-
-    # === 自动关键词回复（从配置读取，带冷却）===
-    now_time = time.time()
-    last_reply_time = self.auto_reply_last_time.get(group_id, 0)
-    if now_time - last_reply_time >= self.auto_reply_cooldown:
-        for key, reply in self.auto_replies.items():
-            if key in message_str:
-                try:
-                    await event.bot.send_group_msg(group_id=int(group_id), message=reply)
-                    self.auto_reply_last_time[group_id] = now_time  # 记录本群上次回复时间
-                except Exception as e:
-                    logger.error(f"自动回复失败: {e}")
-                break  # 匹配到第一个就停止
-    else:
-        logger.debug(f"群 {group_id} 自动回复冷却中，剩余 {int(self.auto_reply_cooldown - (now_time - last_reply_time))} 秒")
-    # === 自动关键词回复结束 ===
-
-    # === 查共群（对所有人开放，不需@）===
-    if message_str.startswith("查共群"):
-        await self.handle_check_common_groups(event)
-        return
-
-    # 1. 群管命令识别
-    command_keywords = (
-        "禁言", "解禁", "解言", "踢黑", "解黑",
-        "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
-        "全体禁言", "全体解言",
-        "加白", "移白", "白名单列表",
-        "黑名单列表",
-        "针对列表",
-    )
-    if message_str.startswith(command_keywords):
-        # 仅群主/管理员/（可选）子管理员可执行
-        if not await self._is_operator(event, int(group_id), int(sender_id)):
-            try:
-                resp = await event.bot.send_group_msg(
-                    group_id=int(group_id),
-                    message="你配指挥我吗？"
-                )
-                if isinstance(resp, dict) and "message_id" in resp:
-                    asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=10))
-            except Exception as e:
-                logger.error(f"发送无权限提示失败: {e}")
+    @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
+    async def auto_recall(self, event: AstrMessageEvent):
+        if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
             return
 
-        await self.handle_commands(event)
-        return
+        group_id = event.get_group_id()
+        sender_id = event.get_sender_id()
+        message_str = event.message_str.strip()
+        message_id = event.message_obj.message_id
 
-    # 2. 非命令消息 → 群主/管理员跳过撤回机制
-    try:
-        member_info = await event.bot.get_group_member_info(
-            group_id=int(group_id), user_id=int(sender_id)
-        )
-        role = member_info.get("role", "member")
-        if role in ("owner", "admin"):
-            logger.debug(f"检测到 {sender_id} 身份为 {role}，跳过撤回检测")
+        # 自动回复（带冷却）
+        now_time = time.time()
+        last_reply_time = self.auto_reply_last_time.get(group_id, 0)
+        if now_time - last_reply_time >= self.auto_reply_cooldown:
+            for key, reply in self.auto_replies.items():
+                if key in message_str:
+                    try:
+                        await event.bot.send_group_msg(group_id=int(group_id), message=reply)
+                        self.auto_reply_last_time[group_id] = now_time
+                    except Exception as e:
+                        logger.error(f"自动回复失败: {e}")
+                    break
+        # 查共群
+        if message_str.startswith("查共群"):
+            await self.handle_check_common_groups(event)
             return
-    except Exception as e:
-        logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
 
-    # 3. 黑名单处理
-    if str(sender_id) in self.kick_black_list:
-        await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
-        await event.bot.send_group_msg(
-            group_id=int(group_id),
-            message=f"检测到黑名单用户 {sender_id}，已踢出！"
+        # 群管命令
+        command_keywords = (
+            "禁言", "解禁", "解言", "踢黑", "解黑",
+            "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
+            "全体禁言", "全体解言",
+            "加白", "移白", "白名单列表",
+            "黑名单列表", "针对列表",
         )
-        return
-
-    # 3.5 白名单：跳过关键词/链接/卡片/号码/针对名单撤回，但保留刷屏检测
-    is_whitelisted = str(sender_id) in self.whitelist
-    if is_whitelisted:
-        logger.debug(f"{sender_id} 在白名单中：跳过违禁词/广告/卡片/号码/针对撤回，仅保留刷屏检测")
-
-    # 4. 针对名单处理
-    if not is_whitelisted and (str(sender_id) in self.target_user_list):
-        await event.bot.delete_msg(message_id=message_id)
-        logger.info(f"静默撤回 {sender_id} 的消息（针对名单）")
-        return
-
-    # 5. 关键词检测
-    if not is_whitelisted:
-        for word in self.bad_words:
-            if word and word in message_str:
-                logger.info(f"用户:{sender_id} 触发[违禁词: {word}] 已撤回")
-                await self.try_recall(event, message_id, group_id, sender_id)
-                return
-
-    # 6. 链接检测
-    if (not is_whitelisted) and self.recall_links and ("http://" in message_str or "https://" in message_str):
-        await self.try_recall(event, message_id, group_id, sender_id)
-        logger.info(f"检测到链接，已撤回 {sender_id} 的消息")
-        return
-
-    # 7. 卡片消息检测
-    if (not is_whitelisted) and self.recall_cards:
-        for segment in getattr(event.message_obj, 'message', []):
-            seg_type = getattr(segment, 'type', '')
-            if seg_type in ['Share', 'Card', 'Contact', 'Json', 'Xml', 'share', 'json', 'xml', 'contact']:
-                await self.try_recall(event, message_id, group_id, sender_id)
-                logger.info(f"检测到卡片消息，已撤回 {sender_id} 的消息")
-                return
-
-    # 8. 号码检测
-    if (not is_whitelisted) and self.recall_numbers:
-        if self._is_pure_text(event, message_str):
-            if re.search(r"(?<!\d)\d{6,}(?!\d)", message_str):
-                await self.try_recall(event, message_id, group_id, sender_id)
-                logger.info(f"检测到连续数字，已撤回 {sender_id} 的消息: {message_str}")
-                return
-
-    # 9. 刷屏检测（白名单也生效）
-    now = time.time()
-    key = (group_id, sender_id)
-    self.user_message_times[key].append(now)
-    self.user_message_ids[key].append(message_id)
-
-    if len(self.user_message_times[key]) == self.spam_count:
-        if now - self.user_message_times[key][0] <= self.spam_interval:
-            await event.bot.set_group_ban(
-                group_id=int(group_id),
-                user_id=int(sender_id),
-                duration=self.spam_ban_duration
-            )
-            for msg_id in self.user_message_ids[key]:
+        if message_str.startswith(command_keywords):
+            if not await self._is_operator(event, int(group_id), int(sender_id)):
                 try:
-                    await event.bot.delete_msg(message_id=msg_id)
+                    resp = await event.bot.send_group_msg(group_id=int(group_id), message="你配指挥我吗？")
+                    if isinstance(resp, dict) and "message_id" in resp:
+                        asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=10))
                 except Exception as e:
-                    logger.error(f"刷屏批量撤回失败: {e}")
-            self.user_message_times[key].clear()
-            self.user_message_ids[key].clear()
+                    logger.error(f"发送无权限提示失败: {e}")
+                return
+            await self.handle_commands(event)
+            return
+
+        # 群主/管理员跳过撤回
+        try:
+            member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
+            if member_info.get("role", "member") in ("owner", "admin"):
+                return
+        except Exception as e:
+            logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
+
+        # 黑名单
+        if str(sender_id) in self.kick_black_list:
+            await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
+            return
+
+        # 白名单
+        is_whitelisted = str(sender_id) in self.whitelist
+
+        # 针对名单
+        if not is_whitelisted and (str(sender_id) in self.target_user_list):
+            await event.bot.delete_msg(message_id=message_id)
+            return
+
+        # 违禁词
+        if not is_whitelisted:
+            for word in self.bad_words:
+                if word and word in message_str:
+                    await self.try_recall(event, message_id, group_id, sender_id)
+                    return
+
+        # 链接
+        if (not is_whitelisted) and self.recall_links and ("http://" in message_str or "https://" in message_str):
+            await self.try_recall(event, message_id, group_id, sender_id)
+            return
+
+        # 卡片
+        if (not is_whitelisted) and self.recall_cards:
+            for segment in getattr(event.message_obj, 'message', []):
+                seg_type = getattr(segment, 'type', '')
+                if seg_type in ['Share', 'Card', 'Contact', 'Json', 'Xml', 'share', 'json', 'xml', 'contact']:
+                    await self.try_recall(event, message_id, group_id, sender_id)
+                    return
+
+        # 号码
+        if (not is_whitelisted) and self.recall_numbers:
+            if self._is_pure_text(event, message_str) and re.search(r"(?<!\d)\d{6,}(?!\d)", message_str):
+                await self.try_recall(event, message_id, group_id, sender_id)
+                return
+
+        # 刷屏
+        now = time.time()
+        key = (group_id, sender_id)
+        self.user_message_times[key].append(now)
+        self.user_message_ids[key].append(message_id)
+        if len(self.user_message_times[key]) == self.spam_count:
+            if now - self.user_message_times[key][0] <= self.spam_interval:
+                await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
+                for msg_id in self.user_message_ids[key]:
+                    try:
+                        await event.bot.delete_msg(message_id=msg_id)
+                    except Exception as e:
+                        logger.error(f"刷屏批量撤回失败: {e}")
+                self.user_message_times[key].clear()
+                self.user_message_ids[key].clear()
 
     async def try_recall(self, event: AstrMessageEvent, message_id: str, group_id: int, sender_id: int):
         try:
@@ -285,12 +234,7 @@ async def auto_recall(self, event: AstrMessageEvent):
             try:
                 member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
                 role = member_info.get('role', 'member')
-                if role == 'owner':
-                    logger.error(f"撤回失败: 对方是群主({sender_id})，无权限撤回。")
-                elif role == 'admin':
-                    logger.error(f"撤回失败: 对方是管理员({sender_id})，无权限撤回。")
-                else:
-                    logger.error(f"撤回失败: {e}（用户角色: {role}）")
+                logger.error(f"撤回失败: {e}（用户角色: {role}）")
             except Exception as ex:
                 logger.error(f"撤回失败且查询用户角色失败: {e} / 查询错误: {ex}")
 
