@@ -208,12 +208,16 @@ class AutoRecallKeywordPlugin(Star):
                     await self.try_recall(event, message_id, group_id, sender_id)
                     return
 
-        # 号码
+        # 8. 号码检测（只在纯文本中触发）
         if (not is_whitelisted) and self.recall_numbers:
-            if self._is_pure_text(event, message_str) and re.search(r"(?<!\d)\d{6,}(?!\d)", message_str):
-                logger.error(f"触发【号码】已撤回！")
-                await self.try_recall(event, message_id, group_id, sender_id)
-                return
+            # 不是纯文本就跳过（避免 @ / 引用 被误撤回）
+            if not self._is_pure_text(event, message_str):
+                pass
+            else:
+                if re.search(r"(?<!\d)\d{6,}(?!\d)", message_str):
+                    await self.try_recall(event, message_id, group_id, sender_id)
+                    logger.error(f"检测到连续数字，已撤回 {sender_id} 的消息: {message_str}")
+                    return
 
         # 刷屏
         now = time.time()
