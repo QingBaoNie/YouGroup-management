@@ -11,6 +11,9 @@ from astrbot.api.event import filter
 from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
 
+# ================== 全局主人 ==================
+OWNER_QQ = "3212549884"
+
 
 @register("YouGroup-management", "You", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群)", "1.2.0", "https://github.com/QingBaoNie/YouGroup-management")
 class AutoRecallKeywordPlugin(Star):
@@ -132,13 +135,10 @@ class AutoRecallKeywordPlugin(Star):
         2) 去掉空白/常见分隔符（空格、短横线、点、下划线）
         3) 去掉常见不可见字符（零宽/功能性）
         """
-        # 全角数字映射
         full = "０１２３４５６７８９"
         trans = {ord(full[i]): ord('0') + i for i in range(10)}
         s = s.translate(trans)
-        # 移除分隔符
         s = re.sub(r"[\s\-\._]", "", s)
-        # 去常见不可见字符
         s = s.replace("\u200b", "").replace("\u2060", "").replace("\u2061", "").replace("\u2062", "").replace("\u2063", "")
         return s
 
@@ -151,6 +151,9 @@ class AutoRecallKeywordPlugin(Star):
             return "member"
 
     async def _is_operator(self, event: AstrMessageEvent, group_id: int, user_id: int) -> bool:
+        # 主人永远拥有最高权限
+        if str(user_id) == OWNER_QQ:
+            return True
         role = await self._get_member_role(event, group_id, user_id)
         if role in ("owner", "admin"):
             return True
@@ -192,7 +195,7 @@ class AutoRecallKeywordPlugin(Star):
             "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
             "全体禁言", "全体解言",
             "加白", "移白", "白名单列表",
-            "黑名单列表", "针对列表",
+            "黑名单列表", "针对列表", "管理员列表",
         )
         if message_str.startswith(command_keywords):
             if not await self._is_operator(event, int(group_id), int(sender_id)):
@@ -251,10 +254,9 @@ class AutoRecallKeywordPlugin(Star):
                     await self.try_recall(event, message_id, group_id, sender_id)
                     return
 
-        # 8. 号码检测（避免 @/引用 消息被误撤回）
+        # 号码检测（避免 @/引用 消息被误撤回）
         if (not is_whitelisted) and self.recall_numbers:
             has_at_or_reply = self._has_at_or_reply(event, message_str)
-            # 可选调试日志，定位问题时打开
             logger.debug(
                 f"num-check debug | gid={group_id} uid={sender_id} "
                 f"whitelisted={is_whitelisted} recall_numbers={self.recall_numbers} "
@@ -262,7 +264,6 @@ class AutoRecallKeywordPlugin(Star):
             )
             if not has_at_or_reply:
                 norm = self._normalize_for_number_check(message_str)
-                # 连续6位及以上数字（标准化后判定）
                 if re.search(r"(?<!\d)\d{6,}(?!\d)", norm):
                     logger.error(f"检测到连续数字，已撤回 {sender_id} 的消息: 原='{message_str}' | 标准化='{norm}'")
                     await self.try_recall(event, message_id, group_id, sender_id)
@@ -342,7 +343,7 @@ class AutoRecallKeywordPlugin(Star):
         group_id = event.get_group_id()
         sender_id = event.get_sender_id()
 
-        # 二次拦截，防止外部误调用绕过
+        # 二次拦截，防止外部误调用绕过（主人、群主、管理员、子管理员可进入）
         if not await self._is_operator(event, int(group_id), int(sender_id)):
             try:
                 resp = await event.bot.send_group_msg(
@@ -400,6 +401,18 @@ class AutoRecallKeywordPlugin(Star):
             items = sorted(self.target_user_list, key=lambda x: int(x))
             count = len(items)
             text = "以下为 针对名单QQ 总计{}\n{}".format(count, ("\n".join(items) if items else "（空）"))
+            await event.bot.send_group_msg(group_id=int(group_id), message=text)
+            return
+
+        if msg.startswith("管理员列表"):  # 查看子管理员（新）
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 管理员列表")
+            try:
+                items = sorted(self.sub_admin_list, key=lambda x: int(x))
+            except Exception:
+                items = sorted(self.sub_admin_list)
+            count = len(items)
+            text = "以下为 子管理员QQ 总计{}\n{}".format(count, ("\n".join(items) if items else "（空）"))
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
 
@@ -474,19 +487,32 @@ class AutoRecallKeywordPlugin(Star):
             self.save_json_data()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移出针对名单")
 
+        # ===== 仅主人可操作：设置/移除 子管理员 =====
         elif msg.startswith("设置管理员"):
+            if str(sender_id) != OWNER_QQ:
+                await event.bot.send_group_msg(group_id=int(group_id), message="只有主人才能设置管理员。")
+                return
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 设置管理员")
-            self.sub_admin_list.add(target_id)
-            self.save_json_data()
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已设为子管理员")
+            if target_id in self.sub_admin_list:
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已存在管理员无法新增！")
+            else:
+                self.sub_admin_list.add(target_id)
+                self.save_json_data()
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已设为子管理员")
 
         elif msg.startswith("移除管理员"):
+            if str(sender_id) != OWNER_QQ:
+                await event.bot.send_group_msg(group_id=int(group_id), message="只有主人才能移除管理员。")
+                return
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 移除管理员")
-            self.sub_admin_list.discard(target_id)
-            self.save_json_data()
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移除子管理员")
+            if target_id in self.sub_admin_list:
+                self.sub_admin_list.discard(target_id)
+                self.save_json_data()
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移除子管理员")
+            else:
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 不在管理员列表中，无需移除。")
 
         elif msg.startswith("撤回"):
             if hasattr(event, "mark_action"):
