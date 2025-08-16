@@ -19,7 +19,7 @@ OWNER_QQ = "3212549884"
     "YouGroup-management",
     "You",
     "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群+查询违规)",
-    "1.2.1",
+    "1.2.2",
     "https://github.com/QingBaoNie/YouGroup-management"
 )
 class AutoRecallKeywordPlugin(Star):
@@ -74,6 +74,10 @@ class AutoRecallKeywordPlugin(Star):
         self.recall_cards = _to_bool(admin_config.get("recall_cards", False))
         self.recall_numbers = _to_bool(admin_config.get("recall_numbers", False))
 
+        # ====== 新增：入群邀请策略 ======
+        self.auto_accept_owner_invite = _to_bool(admin_config.get("auto_accept_owner_invite", True))
+        self.reject_non_owner_invite = _to_bool(admin_config.get("reject_non_owner_invite", True))
+
         self.save_json_data()
 
         self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
@@ -84,6 +88,10 @@ class AutoRecallKeywordPlugin(Star):
         logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
         logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list} 白名单: {self.whitelist}")
         logger.info(f"撤回配置: links={self.recall_links}, cards={self.recall_cards}, numbers={self.recall_numbers}")
+        logger.info(
+            f"入群邀请: auto_accept_owner_invite={self.auto_accept_owner_invite}, "
+            f"reject_non_owner_invite={self.reject_non_owner_invite}"
+        )
 
     def save_json_data(self):
         data = {
@@ -166,6 +174,79 @@ class AutoRecallKeywordPlugin(Star):
         if str(user_id) in self.sub_admin_list:
             return True
         return False
+
+    # ========= 新增：自动处理群邀请 =========
+    async def _approve_group_request(self, event: AstrMessageEvent, flag: str, sub_type: str, approve: bool, reason: str = ""):
+        """
+        go-cqhttp/OneBot: set_group_add_request(flag, sub_type, approve, reason)
+        sub_type: 'invite' | 'add'
+        """
+        try:
+            await event.bot.set_group_add_request(flag=flag, sub_type=sub_type, approve=approve, reason=reason)
+        except Exception as e:
+            logger.error(f"处理群请求失败 flag={flag} sub_type={sub_type} approve={approve}: {e}")
+
+    @filter.event_message_type(getattr(EventMessageType, "REQUEST", EventMessageType.GROUP_MESSAGE))
+    async def _on_group_request_owner_invite_v1(self, event: AstrMessageEvent):
+        await self._handle_group_invite_common(event)
+
+    @filter.event_message_type(getattr(EventMessageType, "GROUP_REQUEST", EventMessageType.GROUP_MESSAGE))
+    async def _on_group_request_owner_invite_v2(self, event: AstrMessageEvent):
+        await self._handle_group_invite_common(event)
+
+    async def _handle_group_invite_common(self, event: AstrMessageEvent):
+        """
+        处理群相关请求：
+        - request_type == 'group'
+        - sub_type == 'invite'：
+            * 邀请者是 OWNER_QQ 且开关开启 -> 自动同意
+            * 否则：若 reject_non_owner_invite=True -> 拒绝并私聊“不要拉我”
+        其他类型默认忽略。
+        """
+        try:
+            raw = getattr(event.message_obj, "raw_message", {}) or {}
+            # 兼容 dict / 对象属性
+            request_type = (getattr(raw, "request_type", None) or raw.get("request_type"))
+            sub_type = (getattr(raw, "sub_type", None) or raw.get("sub_type"))
+            flag = (getattr(raw, "flag", None) or raw.get("flag"))
+            group_id = (getattr(raw, "group_id", None) or raw.get("group_id"))
+            user_id = (getattr(raw, "user_id", None) or raw.get("user_id"))  # 邀请者/申请者
+        except Exception as e:
+            logger.error(f"解析群请求事件失败: {e}")
+            return
+
+        if request_type != "group" or not sub_type or not flag:
+            return
+
+        if sub_type == "invite":
+            inviter = str(user_id) if user_id is not None else ""
+            # 主人邀请 -> 同意
+            if self.auto_accept_owner_invite and inviter == OWNER_QQ:
+                if hasattr(event, "mark_action"):
+                    event.mark_action("敏感词插件 - 自动同意主人邀请入群")
+                logger.info(f"主人({OWNER_QQ})邀请加入群 {group_id}，自动同意。")
+                await self._approve_group_request(event, flag=flag, sub_type="invite", approve=True)
+                return
+
+            # 非主人邀请 -> 拒绝 + 私聊提示
+            if self.reject_non_owner_invite:
+                if hasattr(event, "mark_action"):
+                    event.mark_action("敏感词插件 - 拒绝非主人邀请入群")
+                logger.info(f"收到非主人({inviter})的邀请入群到 {group_id}，已拒绝并私聊提示。")
+                await self._approve_group_request(event, flag=flag, sub_type="invite", approve=False, reason="不要拉我")
+                try:
+                    if inviter:
+                        await event.bot.send_private_msg(user_id=int(inviter), message="不要拉我")
+                except Exception as e:
+                    logger.error(f"向邀请者({inviter})发送私聊提示失败: {e}")
+            else:
+                logger.info(f"收到非主人({inviter})邀请，配置为不处理，已忽略。")
+            return
+
+        # 其他类型（如 add 加群申请）保持默认不处理
+        # elif sub_type == "add":
+        #     logger.info("收到加群申请（非邀请），按当前策略忽略。")
+        #     return
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
