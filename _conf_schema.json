@@ -82,6 +82,16 @@
         "description": "是否开启号码撤回（失效）",
         "type": "bool",
         "default": false
+      },
+      "auto_accept_owner_invite": {
+        "description": "是否自动同意主人邀请入群",
+        "type": "bool",
+        "default": true
+      },
+      "reject_non_owner_invite": {
+        "description": "是否拒绝非主人邀请入群并私聊提示“不要拉我”",
+        "type": "bool",
+        "default": true
       }
     }
   },
