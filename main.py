@@ -273,6 +273,25 @@ class AutoRecallKeywordPlugin(Star):
         #     logger.info("收到加群申请（非邀请），按当前策略忽略。")
         #     return
 
+    # ========= 新增：自动回复支持 {face:ID} =========
+    def _parse_message_with_faces(self, text: str):
+        """
+        支持变量 {face:ID}，自动转成 QQ 表情段
+        例如: "早安{face:14}" =>
+        [{"type":"text","data":{"text":"早安"}},{"type":"face","data":{"id":14}}]
+        """
+        segments = []
+        pos = 0
+        for m in re.finditer(r"\{face:(\d+)\}", text):
+            if m.start() > pos:
+                segments.append({"type": "text", "data": {"text": text[pos:m.start()]}})
+            face_id = int(m.group(1))
+            segments.append({"type": "face", "data": {"id": face_id}})
+            pos = m.end()
+        if pos < len(text):
+            segments.append({"type": "text", "data": {"text": text[pos:]}})
+        return segments if segments else [{"type": "text", "data": {"text": text}}]
+
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
         if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
@@ -290,7 +309,10 @@ class AutoRecallKeywordPlugin(Star):
             for key, reply in self.auto_replies.items():
                 if key in message_str:
                     try:
-                        await event.bot.send_group_msg(group_id=int(group_id), message=reply)
+                        await event.bot.send_group_msg(
+                            group_id=int(group_id),
+                            message=self._parse_message_with_faces(reply)
+                        )
                         self.auto_reply_last_time[group_id] = now_time
                     except Exception as e:
                         logger.error(f"自动回复失败: {e}")
