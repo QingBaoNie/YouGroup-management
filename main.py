@@ -35,7 +35,7 @@ class AutoRecallKeywordPlugin(Star):
 
         # 自动回复冷却
         self.auto_reply_last_time = {}
-        self.auto_reply_cooldown = 60
+        self.auto_reply_cooldown = 10
 
     async def initialize(self):
         config_data = self.config
