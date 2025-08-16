@@ -177,8 +177,8 @@ class AutoRecallKeywordPlugin(Star):
         message_str = event.message_str.strip()
         message_id = event.message_obj.message_id
 
-        # === 新增：普通用户 @机器人 -> 禁言5分钟 + 警告（稳健版） ===
-        # 1) 获取机器人 self_id，优先取属性，取不到再调用 get_login_info()
+        # === 新增：普通用户 @机器人 -> 禁言5分钟 + 警告（带详细日志） ===
+        # 1) 获取机器人 self_id，优先属性，取不到再调 get_login_info()
         try:
             self_id = str(getattr(event.bot, "self_id", None) or getattr(event, "self_id", None) or "")
         except Exception:
@@ -186,58 +186,83 @@ class AutoRecallKeywordPlugin(Star):
         if not self_id:
             try:
                 info = await event.bot.get_login_info()
-                sid = info.get("user_id") or info.get("uid") or info.get("uin")
+                sid = (info.get("user_id") or info.get("uid") or info.get("uin"))
                 if sid:
                     self_id = str(sid)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"获取机器人 self_id 失败: {e}")
 
-        def _is_at_bot() -> bool:
-            # 2) 分段优先：兼容多实现的数据位
+        # 2) 分段扫描 + 文本兜底
+        seg_hit = False
+        text_hit_cq = False
+        text_hit_simple = False
+
+        try:
+            segs = getattr(event.message_obj, 'message', []) or []
+            # 打印一条调试：消息段类型列表（不含内容，避免隐私/刷屏）
             try:
-                for seg in getattr(event.message_obj, 'message', []):
-                    s_type = seg.get("type") if isinstance(seg, dict) else getattr(seg, "type", "")
-                    s_type = (s_type or "").lower()
-                    if s_type in ("at",):  # 兼容 At/at
-                        # 统一拿 data
-                        if isinstance(seg, dict):
-                            data = seg.get("data", {}) or {}
-                            cand = (
-                                data.get("qq") or data.get("target") or data.get("user_id")
-                                or seg.get("qq") or seg.get("target")
-                            )
-                        else:
-                            data = getattr(seg, "data", {}) or {}
-                            cand = (
-                                data.get("qq") or data.get("target") or data.get("user_id")
-                                or getattr(seg, "qq", None) or getattr(seg, "target", None)
-                            )
-                        if cand is not None and self_id and str(cand) == self_id:
-                            return True
+                seg_types = [(s.get('type') if isinstance(s, dict) else getattr(s, 'type', '')) for s in segs]
+                logger.debug(f"@bot debug | seg_types={seg_types}")
             except Exception:
                 pass
 
-            # 3) 文本兜底：支持 CQ 码与 [At:xxx]
-            if self_id:
-                if f"[CQ:at,qq={self_id}]" in message_str:
-                    return True
-                m = re.search(r"\[At:(\d+)\]", message_str)
-                if m and m.group(1) == self_id:
-                    return True
-            return False
+            for seg in segs:
+                s_type = seg.get("type") if isinstance(seg, dict) else getattr(seg, "type", "")
+                s_type = (s_type or "").lower()
+                if s_type == "at":
+                    if isinstance(seg, dict):
+                        data = seg.get("data", {}) or {}
+                        cand = (
+                            data.get("qq") or data.get("target") or data.get("user_id")
+                            or seg.get("qq") or seg.get("target")
+                        )
+                    else:
+                        data = getattr(seg, "data", {}) or {}
+                        cand = (
+                            data.get("qq") or data.get("target") or data.get("user_id")
+                            or getattr(seg, "qq", None) or getattr(seg, "target", None)
+                        )
+                    if cand is not None and self_id and str(cand) == self_id:
+                        seg_hit = True
+                        break
+        except Exception as e:
+            logger.error(f"解析消息分段 @ 失败: {e}")
 
-        if self_id and _is_at_bot():
+        if self_id:
+            # CQ 码兜底
+            if f"[CQ:at,qq={self_id}]" in message_str:
+                text_hit_cq = True
+            # 简式 [At:xxxxx] 兜底
+            m = re.search(r"\[At:(\d+)\]", message_str)
+            if m and m.group(1) == self_id:
+                text_hit_simple = True
+
+        at_bot_matched = bool(seg_hit or text_hit_cq or text_hit_simple)
+
+        # 关键观测日志：看到这条就知道为什么触发/不触发
+        logger.info(
+            f"@bot check | gid={group_id} uid={sender_id} self_id={self_id} "
+            f"seg_hit={seg_hit} text_hit_cq={text_hit_cq} text_hit_simple={text_hit_simple} "
+            f"matched={at_bot_matched}"
+        )
+
+        if self_id and at_bot_matched:
             # 主人/群主/管理员/子管理员/白名单 不处罚
             is_operator = await self._is_operator(event, int(group_id), int(sender_id))
-            if (not is_operator) and (str(sender_id) not in self.whitelist):
+            in_whitelist = (str(sender_id) in self.whitelist)
+            logger.info(
+                f"@bot decision | gid={group_id} uid={sender_id} "
+                f"is_operator={is_operator} in_whitelist={in_whitelist}"
+            )
+            if (not is_operator) and (not in_whitelist):
                 try:
                     await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=300)
                     await event.bot.send_group_msg(group_id=int(group_id), message="请不要@我，下次惩罚升级！！！")
+                    logger.info(f"@bot punished | gid={group_id} uid={sender_id} duration=300")
                 except Exception as e:
                     logger.error(f"@机器人 自动禁言失败: {e}")
                 return
         # === 新增逻辑结束 ===
-
 
         # 自动回复（带冷却）
         now_time = time.time()
