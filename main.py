@@ -175,6 +175,31 @@ class AutoRecallKeywordPlugin(Star):
             return True
         return False
 
+    # === 机器人权限检测（是否为群管理员/群主） ===
+    async def _get_self_user_id(self, event: AstrMessageEvent):
+        try:
+            info = await event.bot.get_login_info()
+            uid = info.get('user_id')
+            return str(uid) if uid is not None else None
+        except Exception:
+            try:
+                uid = getattr(event.bot, 'self_id', None) or \
+                      getattr(getattr(event, 'message_obj', None), 'self_id', None) or \
+                      getattr(event, 'self_id', None)
+                return str(uid) if uid is not None else None
+            except Exception:
+                return None
+
+    async def _bot_is_admin(self, event: AstrMessageEvent, group_id: int) -> bool:
+        try:
+            self_id = await self._get_self_user_id(event)
+            if not self_id:
+                return False
+            info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(self_id))
+            return info.get('role', 'member') in ('owner', 'admin')
+        except Exception:
+            return False
+
     # ========= 新增：自动处理群邀请 =========
     async def _approve_group_request(self, event: AstrMessageEvent, flag: str, sub_type: str, approve: bool, reason: str = ""):
         """
@@ -323,12 +348,14 @@ class AutoRecallKeywordPlugin(Star):
             await event.bot.delete_msg(message_id=message_id)
             return
 
-        # 违禁词
+        # 违禁词（需机器人具备管理权限）
         if not is_whitelisted:
             for word in self.bad_words:
                 if word and word in message_str:
-                    logger.error(f"触发违禁词【{word}】已撤回！")
-                    await self.try_recall(event, message_id, group_id, sender_id)
+                    if await self._bot_is_admin(event, int(group_id)):
+                        logger.error(f"触发违禁词【{word}】已撤回！")
+                        await self.try_recall(event, message_id, group_id, sender_id)
+                    # 无管理权限：静默跳过（不记录、不处理）
                     return
 
         # 链接
@@ -368,13 +395,15 @@ class AutoRecallKeywordPlugin(Star):
         self.user_message_ids[key].append(message_id)
         if len(self.user_message_times[key]) == self.spam_count:
             if now - self.user_message_times[key][0] <= self.spam_interval:
-                logger.error(f"触发【刷屏】已禁言并批量撤回！")
-                await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
-                for msg_id in self.user_message_ids[key]:
-                    try:
-                        await event.bot.delete_msg(message_id=msg_id)
-                    except Exception as e:
-                        logger.error(f"刷屏批量撤回失败: {e}")
+                if await self._bot_is_admin(event, int(group_id)):
+                    logger.error(f"触发【刷屏】已禁言并批量撤回！")
+                    await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
+                    for msg_id in self.user_message_ids[key]:
+                        try:
+                            await event.bot.delete_msg(message_id=msg_id)
+                        except Exception as e:
+                            logger.error(f"刷屏批量撤回失败: {e}")
+                # 无管理权限：静默，不做任何处理
                 self.user_message_times[key].clear()
                 self.user_message_ids[key].clear()
 
