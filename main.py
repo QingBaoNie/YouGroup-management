@@ -177,6 +177,46 @@ class AutoRecallKeywordPlugin(Star):
         message_str = event.message_str.strip()
         message_id = event.message_obj.message_id
 
+        # === 新增：普通用户 @机器人 -> 禁言5分钟 + 警告 ===
+        try:
+            # 获取机器人自身 QQ（多实现兼容）
+            self_id = str(getattr(event.bot, "self_id", None) or getattr(event, "self_id", None) or "")
+        except Exception:
+            self_id = ""
+
+        def _is_at_bot() -> bool:
+            # 优先分段检测
+            try:
+                for seg in getattr(event.message_obj, 'message', []):
+                    s_type = seg.get("type") if isinstance(seg, dict) else getattr(seg, "type", "")
+                    s_type = (s_type or "").lower()
+                    if s_type == "at":
+                        qq = None
+                        if isinstance(seg, dict):
+                            qq = seg.get("data", {}).get("qq") or seg.get("qq")
+                        else:
+                            qq = getattr(seg, "qq", None)
+                        if qq is not None and str(qq) == self_id:
+                            return True
+            except Exception:
+                pass
+            # CQ码兜底
+            if self_id and f"[CQ:at,qq={self_id}]" in message_str:
+                return True
+            return False
+
+        if self_id and _is_at_bot():
+            # 主人/群主/管理员/子管理员/白名单不处罚
+            is_operator = await self._is_operator(event, int(group_id), int(sender_id))
+            if (not is_operator) and (str(sender_id) not in self.whitelist):
+                try:
+                    await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=300)
+                    await event.bot.send_group_msg(group_id=int(group_id), message="请不要@我，下次惩罚升级！！！")
+                except Exception as e:
+                    logger.error(f"@机器人 自动禁言失败: {e}")
+                return
+        # === 新增逻辑结束 ===
+
         # 自动回复（带冷却）
         now_time = time.time()
         last_reply_time = self.auto_reply_last_time.get(group_id, 0)
@@ -363,7 +403,7 @@ class AutoRecallKeywordPlugin(Star):
         qr_url = f"{qr_api}?{params}"
 
         message_segments = [
-            {"type": "text", "data": {"text": "扫描二维码进入『查询违规』（60秒后自动撤回）\n"}},
+            {"type": "text", "data": {"text": "扫描二维码『查询违规』\n"}},
             {"type": "image", "data": {"file": qr_url}},
         ]
 
