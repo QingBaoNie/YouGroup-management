@@ -177,36 +177,57 @@ class AutoRecallKeywordPlugin(Star):
         message_str = event.message_str.strip()
         message_id = event.message_obj.message_id
 
-        # === 新增：普通用户 @机器人 -> 禁言5分钟 + 警告 ===
+        # === 新增：普通用户 @机器人 -> 禁言5分钟 + 警告（稳健版） ===
+        # 1) 获取机器人 self_id，优先取属性，取不到再调用 get_login_info()
         try:
-            # 获取机器人自身 QQ（多实现兼容）
             self_id = str(getattr(event.bot, "self_id", None) or getattr(event, "self_id", None) or "")
         except Exception:
             self_id = ""
+        if not self_id:
+            try:
+                info = await event.bot.get_login_info()
+                sid = info.get("user_id") or info.get("uid") or info.get("uin")
+                if sid:
+                    self_id = str(sid)
+            except Exception:
+                pass
 
         def _is_at_bot() -> bool:
-            # 优先分段检测
+            # 2) 分段优先：兼容多实现的数据位
             try:
                 for seg in getattr(event.message_obj, 'message', []):
                     s_type = seg.get("type") if isinstance(seg, dict) else getattr(seg, "type", "")
                     s_type = (s_type or "").lower()
-                    if s_type == "at":
-                        qq = None
+                    if s_type in ("at",):  # 兼容 At/at
+                        # 统一拿 data
                         if isinstance(seg, dict):
-                            qq = seg.get("data", {}).get("qq") or seg.get("qq")
+                            data = seg.get("data", {}) or {}
+                            cand = (
+                                data.get("qq") or data.get("target") or data.get("user_id")
+                                or seg.get("qq") or seg.get("target")
+                            )
                         else:
-                            qq = getattr(seg, "qq", None)
-                        if qq is not None and str(qq) == self_id:
+                            data = getattr(seg, "data", {}) or {}
+                            cand = (
+                                data.get("qq") or data.get("target") or data.get("user_id")
+                                or getattr(seg, "qq", None) or getattr(seg, "target", None)
+                            )
+                        if cand is not None and self_id and str(cand) == self_id:
                             return True
             except Exception:
                 pass
-            # CQ码兜底
-            if self_id and f"[CQ:at,qq={self_id}]" in message_str:
-                return True
+
+            # 3) 文本兜底：支持 CQ 码与 [At:xxx]
+            if self_id:
+                if f"[CQ:at,qq={self_id}]" in message_str:
+                    return True
+                m = re.search(r"\[At:(\d+)\]", message_str)
+                if m and m.group(1) == self_id:
+                    return True
             return False
 
         if self_id and _is_at_bot():
-            # 主人/群主/管理员/子管理员/白名单不处罚
+            # 主人/群主/管理员/子管理员/白名单 不处罚
             is_operator = await self._is_operator(event, int(group_id), int(sender_id))
             if (not is_operator) and (str(sender_id) not in self.whitelist):
                 try:
@@ -216,6 +237,7 @@ class AutoRecallKeywordPlugin(Star):
                     logger.error(f"@机器人 自动禁言失败: {e}")
                 return
         # === 新增逻辑结束 ===
+
 
         # 自动回复（带冷却）
         now_time = time.time()
