@@ -15,7 +15,13 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import Aioc
 OWNER_QQ = "3212549884"
 
 
-@register("YouGroup-management", "You", "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群)", "1.2.0", "https://github.com/QingBaoNie/YouGroup-management")
+@register(
+    "YouGroup-management",
+    "You",
+    "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群+查询违规)",
+    "1.2.1",
+    "https://github.com/QingBaoNie/YouGroup-management"
+)
 class AutoRecallKeywordPlugin(Star):
     def __init__(self, context: Context, config):
         super().__init__(context)
@@ -184,6 +190,11 @@ class AutoRecallKeywordPlugin(Star):
                         logger.error(f"自动回复失败: {e}")
                     break
 
+        # 查询违规（二维码，60秒后撤回）
+        if message_str.startswith("查询违规"):
+            await self.handle_check_violation(event)
+            return
+
         # 查共群
         if message_str.startswith("查共群"):
             await self.handle_check_common_groups(event)
@@ -337,6 +348,40 @@ class AutoRecallKeywordPlugin(Star):
             )
             if isinstance(resp, dict) and "message_id" in resp:
                 asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"]))
+
+    async def handle_check_violation(self, event: AstrMessageEvent):
+        """
+        发送“查询违规”时返回二维码，内容为固定链接，消息 60 秒后自动撤回。
+        与查共群逻辑一致：优先发二维码图片，失败则回退为文本链接。
+        """
+        group_id = event.get_group_id()
+        base_url = "https://m.q.qq.com/a/s/07befc388911b30c2359bfa383f2d693"
+
+        # 生成二维码（与查共群同源 API）
+        qr_api = "https://api.qrserver.com/v1/create-qr-code/"
+        params = f"size=360x360&margin=0&data={urllib.parse.quote_plus(base_url)}"
+        qr_url = f"{qr_api}?{params}"
+
+        message_segments = [
+            {"type": "text", "data": {"text": "扫描二维码进入『查询违规』（60秒后自动撤回）\n"}},
+            {"type": "image", "data": {"file": qr_url}},
+        ]
+
+        try:
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 查询违规")
+
+            resp = await event.bot.send_group_msg(group_id=int(group_id), message=message_segments)
+            if isinstance(resp, dict) and "message_id" in resp:
+                asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=60))
+        except Exception as e:
+            logger.error(f"查询违规二维码发送失败，回退文本：{e}")
+            resp = await event.bot.send_group_msg(
+                group_id=int(group_id),
+                message=f"查询违规链接（60秒后自动撤回）：\n{base_url}"
+            )
+            if isinstance(resp, dict) and "message_id" in resp:
+                asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=60))
 
     async def handle_commands(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
