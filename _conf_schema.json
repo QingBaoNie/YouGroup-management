@@ -79,7 +79,7 @@
         "default": false
       },
       "recall_numbers": {
-        "description": "是否开启号码撤回（失效）",
+        "description": "是否开启号码撤回",
         "type": "bool",
         "default": false
       },
