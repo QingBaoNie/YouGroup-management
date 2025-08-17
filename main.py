@@ -11,8 +11,10 @@ from astrbot.api.event import filter
 from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
 
-# ================== 全局主人 ==================
-OWNER_QQ = "3212549884"
+# =========================================================
+# 全局常量配置
+# =========================================================
+OWNER_QQ = "3212549884"   # 主人账号（最高权限）
 
 
 @register(
@@ -23,11 +25,18 @@ OWNER_QQ = "3212549884"
     "https://github.com/QingBaoNie/YouGroup-management"
 )
 class AutoRecallKeywordPlugin(Star):
+    # =========================================================
+    # 初始化（成员变量、默认结构）
+    # =========================================================
     def __init__(self, context: Context, config):
         super().__init__(context)
         self.config = config
+
+        # 消息追踪（刷屏检测）
         self.user_message_times = defaultdict(lambda: deque(maxlen=5))
         self.user_message_ids = defaultdict(lambda: deque(maxlen=5))
+
+        # 权限/名单集合
         self.kick_black_list = set()
         self.target_user_list = set()
         self.sub_admin_list = set()
@@ -37,13 +46,27 @@ class AutoRecallKeywordPlugin(Star):
         self.auto_reply_last_time = {}
         self.auto_reply_cooldown = 10
 
+    # =========================================================
+    # 初始化配置（从外部 config 注入、解析开关、打印日志）
+    # =========================================================
     async def initialize(self):
         config_data = self.config
         self.bad_words = config_data.get("bad_words", [])
-        spam_config = config_data.get("spam_config", {})
-        admin_config = config_data.get("admin_config", {})
 
-        # 自动回复
+        # --- 刷屏配置 ---
+        spam_config = config_data.get("spam_config", {})
+        self.spam_count = spam_config.get("spam_count", 5)
+        self.spam_interval = spam_config.get("spam_interval", 3)
+        self.spam_ban_duration = spam_config.get("spam_ban_duration", 60)
+
+        # --- 群管配置 ---
+        admin_config = config_data.get("admin_config", {})
+        self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
+        self.kick_black_list = set(admin_config.get("kick_black_list", []))
+        self.target_user_list = set(admin_config.get("target_user_list", []))
+        self.whitelist = set(admin_config.get("whitelist", []))
+
+        # --- 自动回复规则（支持 {face:ID} 变量，发送时转换）---
         auto_replies_config = config_data.get("auto_replies", [])
         self.auto_replies = {}
         for item in auto_replies_config:
@@ -51,48 +74,40 @@ class AutoRecallKeywordPlugin(Star):
                 key, val = item.split("-", 1)
                 self.auto_replies[key.strip()] = val.strip()
 
-        self.spam_count = spam_config.get("spam_count", 5)
-        self.spam_interval = spam_config.get("spam_interval", 3)
-        self.spam_ban_duration = spam_config.get("spam_ban_duration", 60)
-
-        self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
-        self.kick_black_list = set(admin_config.get("kick_black_list", []))
-        self.target_user_list = set(admin_config.get("target_user_list", []))
-        self.whitelist = set(admin_config.get("whitelist", []))
-
-        # ---- 关键：稳健化布尔解析 ----
+        # --- 功能开关：稳健布尔解析 ---
         def _to_bool(v):
-            if isinstance(v, bool):
-                return v
-            if isinstance(v, (int, float)):
-                return v != 0
-            if isinstance(v, str):
-                return v.strip().lower() in {"1", "true", "yes", "on"}
+            if isinstance(v, bool): return v
+            if isinstance(v, (int, float)): return v != 0
+            if isinstance(v, str): return v.strip().lower() in {"1", "true", "yes", "on"}
             return False
 
-        self.recall_links = _to_bool(admin_config.get("recall_links", False))
-        self.recall_cards = _to_bool(admin_config.get("recall_cards", False))
-        self.recall_numbers = _to_bool(admin_config.get("recall_numbers", False))
+        self.recall_links   = _to_bool(admin_config.get("recall_links", False))    # 链接撤回
+        self.recall_cards   = _to_bool(admin_config.get("recall_cards", False))    # 卡片撤回
+        self.recall_numbers = _to_bool(admin_config.get("recall_numbers", False))  # 连续数字撤回
+        self.recall_forward = _to_bool(admin_config.get("recall_forward", False))  # 合并转发/组合消息撤回（新增）
 
-        # ====== 新增：入群邀请策略 ======
+        # --- 入群邀请策略 ---
         self.auto_accept_owner_invite = _to_bool(admin_config.get("auto_accept_owner_invite", True))
-        self.reject_non_owner_invite = _to_bool(admin_config.get("reject_non_owner_invite", True))
+        self.reject_non_owner_invite  = _to_bool(admin_config.get("reject_non_owner_invite", True))
 
+        # --- 数据持久化 ---
         self.save_json_data()
 
+        # --- 刷屏窗口长度根据配置重置 ---
         self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
         self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
 
+        # --- 启动日志 ---
         logger.info(f"敏感词列表: {self.bad_words}")
         logger.info(f"自动回复规则: {self.auto_replies}")
         logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
         logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list} 白名单: {self.whitelist}")
-        logger.info(f"撤回配置: links={self.recall_links}, cards={self.recall_cards}, numbers={self.recall_numbers}")
-        logger.info(
-            f"入群邀请: auto_accept_owner_invite={self.auto_accept_owner_invite}, "
-            f"reject_non_owner_invite={self.reject_non_owner_invite}"
-        )
+        logger.info(f"撤回配置: links={self.recall_links}, cards={self.recall_cards}, numbers={self.recall_numbers}, forward={self.recall_forward}")
+        logger.info(f"入群邀请: auto_accept_owner_invite={self.auto_accept_owner_invite}, reject_non_owner_invite={self.reject_non_owner_invite}")
 
+    # =========================================================
+    # 工具函数：将内存数据保存到本地（名单类）
+    # =========================================================
     def save_json_data(self):
         data = {
             'kick_black_list': list(self.kick_black_list),
@@ -104,6 +119,9 @@ class AutoRecallKeywordPlugin(Star):
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info("已保存数据到 cesn_data.json")
 
+    # =========================================================
+    # 工具函数：延迟自动撤回指定 message_id
+    # =========================================================
     async def _auto_delete_after(self, bot, message_id: int, delay: int = 60):
         try:
             await asyncio.sleep(delay)
@@ -111,11 +129,10 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"定时撤回失败 message_id={message_id}: {e}")
 
+    # =========================================================
+    # 工具函数：纯文本检测（避免 CQ 段落误判）
+    # =========================================================
     def _is_pure_text(self, event: AstrMessageEvent, message_str: str) -> bool:
-        """
-        只要所有分段都是 text / Text / text_plain / Plain 就认为纯文本。
-        如果拿不到分段，则用字符串里是否含 CQ 标记作兜底。
-        """
         try:
             segs = getattr(event.message_obj, 'message', None)
             if isinstance(segs, list) and segs:
@@ -130,8 +147,10 @@ class AutoRecallKeywordPlugin(Star):
         cq_like_markers = ("[CQ:", "[引用消息]", "[At:", "[图片]", "[表情]", "[语音]", "[视频]")
         return not any(m in message_str for m in cq_like_markers)
 
+    # =========================================================
+    # 工具函数：检测 @ 或 回复段（避免误撤回管理员操作等）
+    # =========================================================
     def _has_at_or_reply(self, event: AstrMessageEvent, message_str: str) -> bool:
-        """检测是否包含 @ 或 回复分段（避免误撤回管理员操作等）"""
         try:
             for seg in getattr(event.message_obj, 'message', []):
                 s_type = seg.get("type") if isinstance(seg, dict) else getattr(seg, "type", "")
@@ -142,13 +161,10 @@ class AutoRecallKeywordPlugin(Star):
             pass
         return ("[CQ:at" in message_str) or ("[CQ:reply" in message_str)
 
+    # =========================================================
+    # 工具函数：号码标准化（去全角、分隔符、零宽符号）
+    # =========================================================
     def _normalize_for_number_check(self, s: str) -> str:
-        """
-        数字检测前的标准化：
-        1) 全角数字 -> 半角
-        2) 去掉空白/常见分隔符（空格、短横线、点、下划线）
-        3) 去掉常见不可见字符（零宽/功能性）
-        """
         full = "０１２３４５６７８９"
         trans = {ord(full[i]): ord('0') + i for i in range(10)}
         s = s.translate(trans)
@@ -156,6 +172,32 @@ class AutoRecallKeywordPlugin(Star):
         s = s.replace("\u200b", "").replace("\u2060", "").replace("\u2061", "").replace("\u2062", "").replace("\u2063", "")
         return s
 
+    # =========================================================
+    # 工具函数：检测合并转发/组合消息
+    # - CQ: [CQ:forward,...]
+    # - 段类型：forward/node/merge_forward/multi_msg 等
+    # - 文本兜底：含“转发消息”
+    # =========================================================
+    def _has_forward_message(self, event: AstrMessageEvent, message_str: str) -> bool:
+        try:
+            for seg in getattr(event.message_obj, 'message', []):
+                if isinstance(seg, dict):
+                    s_type = (seg.get("type") or "").lower()
+                else:
+                    s_type = (getattr(seg, "type", "") or "").lower()
+                if s_type in ("forward", "node", "merge_forward", "multi_msg", "multimsg", "multi-message"):
+                    return True
+        except Exception:
+            pass
+        if "[CQ:forward" in message_str:
+            return True
+        if "转发消息" in message_str:
+            return True
+        return False
+
+    # =========================================================
+    # 权限：获取成员角色、判断是否操作者（主人/群管/子管理员）
+    # =========================================================
     async def _get_member_role(self, event: AstrMessageEvent, group_id: int, user_id: int) -> str:
         try:
             info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(user_id))
@@ -165,7 +207,6 @@ class AutoRecallKeywordPlugin(Star):
             return "member"
 
     async def _is_operator(self, event: AstrMessageEvent, group_id: int, user_id: int) -> bool:
-        # 主人永远拥有最高权限
         if str(user_id) == OWNER_QQ:
             return True
         role = await self._get_member_role(event, group_id, user_id)
@@ -175,7 +216,9 @@ class AutoRecallKeywordPlugin(Star):
             return True
         return False
 
-    # === 机器人权限检测（是否为群管理员/群主） ===
+    # =========================================================
+    # 权限：机器人自身是否为群管
+    # =========================================================
     async def _get_self_user_id(self, event: AstrMessageEvent):
         try:
             info = await event.bot.get_login_info()
@@ -200,12 +243,10 @@ class AutoRecallKeywordPlugin(Star):
         except Exception:
             return False
 
-    # ========= 新增：自动处理群邀请 =========
+    # =========================================================
+    # 入群邀请：自动处理（同意主人邀请/拒绝他人并私聊提示）
+    # =========================================================
     async def _approve_group_request(self, event: AstrMessageEvent, flag: str, sub_type: str, approve: bool, reason: str = ""):
-        """
-        go-cqhttp/OneBot: set_group_add_request(flag, sub_type, approve, reason)
-        sub_type: 'invite' | 'add'
-        """
         try:
             await event.bot.set_group_add_request(flag=flag, sub_type=sub_type, approve=approve, reason=reason)
         except Exception as e:
@@ -220,22 +261,13 @@ class AutoRecallKeywordPlugin(Star):
         await self._handle_group_invite_common(event)
 
     async def _handle_group_invite_common(self, event: AstrMessageEvent):
-        """
-        处理群相关请求：
-        - request_type == 'group'
-        - sub_type == 'invite'：
-            * 邀请者是 OWNER_QQ 且开关开启 -> 自动同意
-            * 否则：若 reject_non_owner_invite=True -> 拒绝并私聊“不要拉我”
-        其他类型默认忽略。
-        """
         try:
             raw = getattr(event.message_obj, "raw_message", {}) or {}
-            # 兼容 dict / 对象属性
             request_type = (getattr(raw, "request_type", None) or raw.get("request_type"))
             sub_type = (getattr(raw, "sub_type", None) or raw.get("sub_type"))
             flag = (getattr(raw, "flag", None) or raw.get("flag"))
             group_id = (getattr(raw, "group_id", None) or raw.get("group_id"))
-            user_id = (getattr(raw, "user_id", None) or raw.get("user_id"))  # 邀请者/申请者
+            user_id = (getattr(raw, "user_id", None) or raw.get("user_id"))
         except Exception as e:
             logger.error(f"解析群请求事件失败: {e}")
             return
@@ -253,7 +285,7 @@ class AutoRecallKeywordPlugin(Star):
                 await self._approve_group_request(event, flag=flag, sub_type="invite", approve=True)
                 return
 
-            # 非主人邀请 -> 拒绝 + 私聊提示
+            # 非主人邀请 -> 拒绝并私聊“不要拉我”
             if self.reject_non_owner_invite:
                 if hasattr(event, "mark_action"):
                     event.mark_action("敏感词插件 - 拒绝非主人邀请入群")
@@ -268,18 +300,10 @@ class AutoRecallKeywordPlugin(Star):
                 logger.info(f"收到非主人({inviter})邀请，配置为不处理，已忽略。")
             return
 
-        # 其他类型（如 add 加群申请）保持默认不处理
-        # elif sub_type == "add":
-        #     logger.info("收到加群申请（非邀请），按当前策略忽略。")
-        #     return
-
-    # ========= 新增：自动回复支持 {face:ID} =========
+    # =========================================================
+    # 自动回复：支持 {face:ID} 自动转 CQ 表情段
+    # =========================================================
     def _parse_message_with_faces(self, text: str):
-        """
-        支持变量 {face:ID}，自动转成 QQ 表情段
-        例如: "早安{face:14}" =>
-        [{"type":"text","data":{"text":"早安"}},{"type":"face","data":{"id":14}}]
-        """
         segments = []
         pos = 0
         for m in re.finditer(r"\{face:(\d+)\}", text):
@@ -292,6 +316,14 @@ class AutoRecallKeywordPlugin(Star):
             segments.append({"type": "text", "data": {"text": text[pos:]}})
         return segments if segments else [{"type": "text", "data": {"text": text}}]
 
+    # =========================================================
+    # 核心入口：群消息自动处理
+    # - 自动回复（带冷却）
+    # - 指令分发
+    # - 黑/白/针对名单处理
+    # - 违禁词/链接/卡片/转发/号码撤回
+    # - 刷屏检测与禁言
+    # =========================================================
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
         if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
@@ -302,7 +334,7 @@ class AutoRecallKeywordPlugin(Star):
         message_str = event.message_str.strip()
         message_id = event.message_obj.message_id
 
-        # 自动回复（带冷却）
+        # ---------- 自动回复（带冷却） ----------
         now_time = time.time()
         last_reply_time = self.auto_reply_last_time.get(group_id, 0)
         if now_time - last_reply_time >= self.auto_reply_cooldown:
@@ -318,17 +350,17 @@ class AutoRecallKeywordPlugin(Star):
                         logger.error(f"自动回复失败: {e}")
                     break
 
-        # 查询违规（二维码，60秒后撤回）
+        # ---------- 指令：查询违规 ----------
         if message_str.startswith("查询违规"):
             await self.handle_check_violation(event)
             return
 
-        # 查共群
+        # ---------- 指令：查共群 ----------
         if message_str.startswith("查共群"):
             await self.handle_check_common_groups(event)
             return
 
-        # 群管命令
+        # ---------- 群管命令分发 ----------
         command_keywords = (
             "禁言", "解禁", "解言", "踢黑", "解黑",
             "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
@@ -348,7 +380,7 @@ class AutoRecallKeywordPlugin(Star):
             await self.handle_commands(event)
             return
 
-        # 群主/管理员跳过撤回
+        # ---------- 群主/管理员发言跳过撤回 ----------
         try:
             member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
             if member_info.get("role", "member") in ("owner", "admin"):
@@ -356,37 +388,34 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
 
-        # 黑名单
+        # ---------- 黑名单：直接踢出 ----------
         if str(sender_id) in self.kick_black_list:
             await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
             await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
             return
 
-        # 白名单
+        # ---------- 白名单/针对名单 ----------
         is_whitelisted = str(sender_id) in self.whitelist
-
-        # 针对名单
         if not is_whitelisted and (str(sender_id) in self.target_user_list):
             await event.bot.delete_msg(message_id=message_id)
             return
 
-        # 违禁词（需机器人具备管理权限）
+        # ---------- 违禁词撤回（需机器人有管理权限） ----------
         if not is_whitelisted:
             for word in self.bad_words:
                 if word and word in message_str:
                     if await self._bot_is_admin(event, int(group_id)):
                         logger.error(f"触发违禁词【{word}】已撤回！")
                         await self.try_recall(event, message_id, group_id, sender_id)
-                    # 无管理权限：静默跳过（不记录、不处理）
                     return
 
-        # 链接
+        # ---------- 链接撤回 ----------
         if (not is_whitelisted) and self.recall_links and ("http://" in message_str or "https://" in message_str):
             logger.error(f"触发【链接】已撤回！")
             await self.try_recall(event, message_id, group_id, sender_id)
             return
 
-        # 卡片
+        # ---------- 卡片撤回 ----------
         if (not is_whitelisted) and self.recall_cards:
             for segment in getattr(event.message_obj, 'message', []):
                 seg_type = getattr(segment, 'type', '')
@@ -395,7 +424,14 @@ class AutoRecallKeywordPlugin(Star):
                     await self.try_recall(event, message_id, group_id, sender_id)
                     return
 
-        # 号码检测（避免 @/引用 消息被误撤回）
+        # ---------- 合并转发/组合消息撤回（新增） ----------
+        if (not is_whitelisted) and self.recall_forward:
+            if self._has_forward_message(event, message_str):
+                logger.error("触发【转发消息】已撤回！")
+                await self.try_recall(event, message_id, group_id, sender_id)
+                return
+
+        # ---------- 连续数字撤回（避免 @/引用 被误撤回） ----------
         if (not is_whitelisted) and self.recall_numbers:
             has_at_or_reply = self._has_at_or_reply(event, message_str)
             logger.debug(
@@ -410,7 +446,7 @@ class AutoRecallKeywordPlugin(Star):
                     await self.try_recall(event, message_id, group_id, sender_id)
                     return
 
-        # 刷屏
+        # ---------- 刷屏检测（禁言 + 批量撤回） ----------
         now = time.time()
         key = (group_id, sender_id)
         self.user_message_times[key].append(now)
@@ -425,10 +461,13 @@ class AutoRecallKeywordPlugin(Star):
                             await event.bot.delete_msg(message_id=msg_id)
                         except Exception as e:
                             logger.error(f"刷屏批量撤回失败: {e}")
-                # 无管理权限：静默，不做任何处理
+                # 无管理权限：静默清空窗口
                 self.user_message_times[key].clear()
                 self.user_message_ids[key].clear()
 
+    # =========================================================
+    # 撤回封装（输出失败原因/角色）
+    # =========================================================
     async def try_recall(self, event: AstrMessageEvent, message_id: str, group_id: int, sender_id: int):
         try:
             await event.bot.delete_msg(message_id=message_id)
@@ -440,6 +479,9 @@ class AutoRecallKeywordPlugin(Star):
             except Exception as ex:
                 logger.error(f"撤回失败且查询用户角色失败: {e} / 查询错误: {ex}")
 
+    # =========================================================
+    # 功能指令：查共群（二维码或文本回退，自动撤回）
+    # =========================================================
     async def handle_check_common_groups(self, event: AstrMessageEvent):
         group_id = event.get_group_id()
         msg = event.message_str.strip()
@@ -481,15 +523,13 @@ class AutoRecallKeywordPlugin(Star):
             if isinstance(resp, dict) and "message_id" in resp:
                 asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"]))
 
+    # =========================================================
+    # 功能指令：查询违规（二维码或文本回退，自动撤回）
+    # =========================================================
     async def handle_check_violation(self, event: AstrMessageEvent):
-        """
-        发送“查询违规”时返回二维码，内容为固定链接，消息 60 秒后自动撤回。
-        与查共群逻辑一致：优先发二维码图片，失败则回退为文本链接。
-        """
         group_id = event.get_group_id()
         base_url = "https://m.q.qq.com/a/s/07befc388911b30c2359bfa383f2d693"
 
-        # 生成二维码（与查共群同源 API）
         qr_api = "https://api.qrserver.com/v1/create-qr-code/"
         params = f"size=360x360&margin=0&data={urllib.parse.quote_plus(base_url)}"
         qr_url = f"{qr_api}?{params}"
@@ -515,25 +555,26 @@ class AutoRecallKeywordPlugin(Star):
             if isinstance(resp, dict) and "message_id" in resp:
                 asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=60))
 
+    # =========================================================
+    # 群管命令：禁言/解禁/踢(黑)/针对/白名单/管理员等
+    # 需要@目标用户的命令会自动读取第一位 @ 的QQ
+    # =========================================================
     async def handle_commands(self, event: AstrMessageEvent):
         msg = event.message_str.strip()
         group_id = event.get_group_id()
         sender_id = event.get_sender_id()
 
-        # 二次拦截，防止外部误调用绕过（主人、群主、管理员、子管理员可进入）
+        # 入口二次校验（防外部绕过）
         if not await self._is_operator(event, int(group_id), int(sender_id)):
             try:
-                resp = await event.bot.send_group_msg(
-                    group_id=int(group_id),
-                    message="你配指挥我吗？"
-                )
+                resp = await event.bot.send_group_msg(group_id=int(group_id), message="你配指挥我吗？")
                 if isinstance(resp, dict) and "message_id" in resp:
                     asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=10))
             except Exception as e:
                 logger.error(f"发送无权限提示失败: {e}")
             return
 
-        # ====== 不需要@对象的群级指令（优先处理）======
+        # ------ 群级开关：全体禁言/解言 ------
         if msg.startswith("全体禁言"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 全体禁言")
@@ -554,7 +595,8 @@ class AutoRecallKeywordPlugin(Star):
                 logger.error(f"关闭全体禁言失败: {e}")
             return
 
-        if msg.startswith("白名单列表"):  # 查看白名单
+        # ------ 查看名单：白/黑/针对/子管理员 ------
+        if msg.startswith("白名单列表"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 白名单列表")
             items = sorted(self.whitelist, key=lambda x: int(x))
@@ -563,7 +605,7 @@ class AutoRecallKeywordPlugin(Star):
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
 
-        if msg.startswith("黑名单列表"):  # 查看黑名单
+        if msg.startswith("黑名单列表"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 黑名单列表")
             items = sorted(self.kick_black_list, key=lambda x: int(x))
@@ -572,7 +614,7 @@ class AutoRecallKeywordPlugin(Star):
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
 
-        if msg.startswith("针对列表"):  # 查看针对名单
+        if msg.startswith("针对列表"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 针对列表")
             items = sorted(self.target_user_list, key=lambda x: int(x))
@@ -581,7 +623,7 @@ class AutoRecallKeywordPlugin(Star):
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
 
-        if msg.startswith("管理员列表"):  # 查看子管理员（新）
+        if msg.startswith("管理员列表"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 管理员列表")
             try:
@@ -593,12 +635,11 @@ class AutoRecallKeywordPlugin(Star):
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
 
-        # ====== 需要@对象的指令 ======
+        # ------ 以下命令需要 @ 目标 ------
         at_list = []
         for segment in getattr(event.message_obj, 'message', []):
             seg_type = getattr(segment, 'type', '')
             if seg_type in ('At', 'at'):
-                # 兼容 dict/对象两种取 qq
                 qq = getattr(segment, 'qq', None)
                 if qq is None and isinstance(segment, dict):
                     qq = segment.get('data', {}).get('qq') or segment.get('qq')
@@ -611,7 +652,7 @@ class AutoRecallKeywordPlugin(Star):
         target_id = str(at_list[0])
         logger.info(f"检测到命令针对@{target_id}")
 
-        # ========== 各指令 ==========
+        # ------ 个体命令处理 ------
         if msg.startswith("禁言"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 禁言")
@@ -664,7 +705,7 @@ class AutoRecallKeywordPlugin(Star):
             self.save_json_data()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移出针对名单")
 
-        # ===== 仅主人可操作：设置/移除 子管理员 =====
+        # ------ 仅主人可操作：设置/移除 子管理员 ------
         elif msg.startswith("设置管理员"):
             if str(sender_id) != OWNER_QQ:
                 await event.bot.send_group_msg(group_id=int(group_id), message="只有主人才能设置管理员。")
@@ -691,6 +732,7 @@ class AutoRecallKeywordPlugin(Star):
             else:
                 await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 不在管理员列表中，无需移除。")
 
+        # ------ 撤回某人的最近N条消息（默认5） ------
         elif msg.startswith("撤回"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 撤回")
@@ -711,7 +753,7 @@ class AutoRecallKeywordPlugin(Star):
 
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 的 {deleted} 条消息")
 
-        # ===== 白名单相关（需要@对象） =====
+        # ------ 白名单维护（需要@对象） ------
         elif msg.startswith("加白"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 加白")
@@ -720,7 +762,10 @@ class AutoRecallKeywordPlugin(Star):
             else:
                 self.whitelist.add(target_id)
                 self.save_json_data()
-                await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入白名单（违禁词/广告/卡片/号码/针对将不撤回，刷屏仍生效）")
+                await event.bot.send_group_msg(
+                    group_id=int(group_id),
+                    message=f"{target_id} 已加入白名单（违禁词/广告/卡片/号码/转发/针对将不撤回，刷屏仍生效）"
+                )
 
         elif msg.startswith("移白"):
             if hasattr(event, "mark_action"):
@@ -729,5 +774,8 @@ class AutoRecallKeywordPlugin(Star):
             self.save_json_data()
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移出白名单")
 
+    # =========================================================
+    # 插件卸载钩子
+    # =========================================================
     async def terminate(self):
         logger.info("AutoRecallKeywordPlugin 插件已被卸载。")
