@@ -85,7 +85,7 @@ class AutoRecallKeywordPlugin(Star):
         self.recall_links   = _to_bool(admin_config.get("recall_links", False))    # 链接撤回
         self.recall_cards   = _to_bool(admin_config.get("recall_cards", False))    # 卡片撤回
         self.recall_numbers = _to_bool(admin_config.get("recall_numbers", False))  # 连续数字撤回
-        self.recall_forward = _to_bool(admin_config.get("recall_forward", False))  # 合并转发/组合消息撤回（新增）
+        self.recall_forward = _to_bool(admin_config.get("recall_forward", False))  # 合并转发/组合消息撤回
 
         # --- 入群邀请策略 ---
         self.auto_accept_owner_invite = _to_bool(admin_config.get("auto_accept_owner_invite", True))
@@ -176,9 +176,6 @@ class AutoRecallKeywordPlugin(Star):
 
     # =========================================================
     # 工具函数：检测合并转发/组合消息
-    # - CQ: [CQ:forward,...]
-    # - 段类型：forward/node/merge_forward/multi_msg 等
-    # - 文本兜底：含“转发消息”
     # =========================================================
     def _has_forward_message(self, event: AstrMessageEvent, message_str: str) -> bool:
         try:
@@ -320,6 +317,53 @@ class AutoRecallKeywordPlugin(Star):
         return segments if segments else [{"type": "text", "data": {"text": text}}]
 
     # =========================================================
+    # 主动退群：主人在任意群发送 “退群#群号” 或 “群号#群号”
+    # =========================================================
+    async def handle_owner_leave_group(self, event: AstrMessageEvent, message_str: str) -> bool:
+        """
+        返回 True 表示已处理该消息（匹配到退群命令），False 表示不匹配。
+        """
+        if not (self.owner_qq and str(event.get_sender_id()) == self.owner_qq):
+            return False
+
+        m = re.match(r"^(?:退群#|群号#)\s*(\d{4,12})$", message_str)
+        if not m:
+            return False
+
+        target_gid = m.group(1)
+        cur_gid = event.get_group_id()
+
+        # 先在当前群里回执
+        try:
+            await event.bot.send_group_msg(
+                group_id=int(cur_gid),
+                message=f"群号:{target_gid}\n已退群！！！"
+            )
+        except Exception as e:
+            logger.error(f"退群命令回执失败（当前群={cur_gid} 目标群={target_gid}）：{e}")
+
+        # 在目标群里发送告别消息，然后退群
+        try:
+            # 告别
+            await event.bot.send_group_msg(group_id=int(target_gid), message="宝宝们,有缘再见~")
+        except Exception as e:
+            logger.error(f"给目标群({target_gid})发送告别消息失败：{e}")
+
+        try:
+            # 退群
+            await event.bot.set_group_leave(group_id=int(target_gid))
+            logger.info(f"已退出群 {target_gid}")
+        except Exception as e:
+            logger.error(f"退出群({target_gid})失败：{e}")
+            # 可选：在当前群提示失败原因
+            try:
+                await event.bot.send_group_msg(group_id=int(cur_gid), message=f"退出群 {target_gid} 失败：{e}")
+            except Exception:
+                pass
+
+        return True
+
+    # =========================================================
     # 核心入口：群消息自动处理
     # =========================================================
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
@@ -331,6 +375,11 @@ class AutoRecallKeywordPlugin(Star):
         sender_id = event.get_sender_id()
         message_str = event.message_str.strip()
         message_id = event.message_obj.message_id
+
+        # ---------- 主人主动退群命令（优先处理） ----------
+        handled = await self.handle_owner_leave_group(event, message_str)
+        if handled:
+            return
 
         # ---------- 自动回复（带冷却） ----------
         now_time = time.time()
@@ -422,7 +471,7 @@ class AutoRecallKeywordPlugin(Star):
                     await self.try_recall(event, message_id, group_id, sender_id)
                     return
 
-        # ---------- 合并转发/组合消息撤回（新增） ----------
+        # ---------- 合并转发/组合消息撤回 ----------
         if (not is_whitelisted) and self.recall_forward:
             if self._has_forward_message(event, message_str):
                 logger.error("触发【转发消息】已撤回！")
