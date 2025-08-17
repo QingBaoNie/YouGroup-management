@@ -11,11 +11,6 @@ from astrbot.api.event import filter
 from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
 
-# =========================================================
-# 全局常量配置
-# =========================================================
-OWNER_QQ = "3212549884"   # 主人账号（最高权限）
-
 
 @register(
     "YouGroup-management",
@@ -46,6 +41,9 @@ class AutoRecallKeywordPlugin(Star):
         self.auto_reply_last_time = {}
         self.auto_reply_cooldown = 10
 
+        # 主人账号（从配置读取）
+        self.owner_qq = ""
+
     # =========================================================
     # 初始化配置（从外部 config 注入、解析开关、打印日志）
     # =========================================================
@@ -65,6 +63,9 @@ class AutoRecallKeywordPlugin(Star):
         self.kick_black_list = set(admin_config.get("kick_black_list", []))
         self.target_user_list = set(admin_config.get("target_user_list", []))
         self.whitelist = set(admin_config.get("whitelist", []))
+
+        # 主人QQ从配置读取
+        self.owner_qq = str(admin_config.get("owner_qq", "")).strip()
 
         # --- 自动回复规则（支持 {face:ID} 变量，发送时转换）---
         auto_replies_config = config_data.get("auto_replies", [])
@@ -98,6 +99,7 @@ class AutoRecallKeywordPlugin(Star):
         self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
 
         # --- 启动日志 ---
+        logger.info(f"主人QQ: {self.owner_qq or '(未配置)'}")
         logger.info(f"敏感词列表: {self.bad_words}")
         logger.info(f"自动回复规则: {self.auto_replies}")
         logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
@@ -207,7 +209,8 @@ class AutoRecallKeywordPlugin(Star):
             return "member"
 
     async def _is_operator(self, event: AstrMessageEvent, group_id: int, user_id: int) -> bool:
-        if str(user_id) == OWNER_QQ:
+        # 主人、群主、管理员、子管理员
+        if self.owner_qq and str(user_id) == self.owner_qq:
             return True
         role = await self._get_member_role(event, group_id, user_id)
         if role in ("owner", "admin"):
@@ -278,10 +281,10 @@ class AutoRecallKeywordPlugin(Star):
         if sub_type == "invite":
             inviter = str(user_id) if user_id is not None else ""
             # 主人邀请 -> 同意
-            if self.auto_accept_owner_invite and inviter == OWNER_QQ:
+            if self.auto_accept_owner_invite and self.owner_qq and inviter == self.owner_qq:
                 if hasattr(event, "mark_action"):
                     event.mark_action("敏感词插件 - 自动同意主人邀请入群")
-                logger.info(f"主人({OWNER_QQ})邀请加入群 {group_id}，自动同意。")
+                logger.info(f"主人({self.owner_qq})邀请加入群 {group_id}，自动同意。")
                 await self._approve_group_request(event, flag=flag, sub_type="invite", approve=True)
                 return
 
@@ -318,11 +321,6 @@ class AutoRecallKeywordPlugin(Star):
 
     # =========================================================
     # 核心入口：群消息自动处理
-    # - 自动回复（带冷却）
-    # - 指令分发
-    # - 黑/白/针对名单处理
-    # - 违禁词/链接/卡片/转发/号码撤回
-    # - 刷屏检测与禁言
     # =========================================================
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def auto_recall(self, event: AstrMessageEvent):
@@ -707,7 +705,7 @@ class AutoRecallKeywordPlugin(Star):
 
         # ------ 仅主人可操作：设置/移除 子管理员 ------
         elif msg.startswith("设置管理员"):
-            if str(sender_id) != OWNER_QQ:
+            if self.owner_qq and str(sender_id) != self.owner_qq:
                 await event.bot.send_group_msg(group_id=int(group_id), message="只有主人才能设置管理员。")
                 return
             if hasattr(event, "mark_action"):
@@ -720,7 +718,7 @@ class AutoRecallKeywordPlugin(Star):
                 await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已设为子管理员")
 
         elif msg.startswith("移除管理员"):
-            if str(sender_id) != OWNER_QQ:
+            if self.owner_qq and str(sender_id) != self.owner_qq:
                 await event.bot.send_group_msg(group_id=int(group_id), message="只有主人才能移除管理员。")
                 return
             if hasattr(event, "mark_action"):
