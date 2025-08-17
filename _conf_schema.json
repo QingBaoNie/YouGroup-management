@@ -32,6 +32,11 @@
     "description": "群管功能配置",
     "type": "object",
     "items": {
+      "owner_qq": {
+        "description": "主人QQ号（最高权限账号）",
+        "type": "string",
+        "default": ""
+      },
       "sub_admin_list": {
         "description": "子管理列表",
         "type": "list",
