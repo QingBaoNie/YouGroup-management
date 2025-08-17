@@ -321,41 +321,61 @@ class AutoRecallKeywordPlugin(Star):
     # =========================================================
     async def handle_owner_leave_group(self, event: AstrMessageEvent, message_str: str) -> bool:
         """
-        返回 True 表示已处理该消息（匹配到退群命令），False 表示不匹配。
+        主人在任意群发送以下任意一种格式即可触发：
+        1) 退群#123456
+        2) 群号#123456
+        3) 退群＃123456   （全角#）
+        4) 退群 123456    （空格分隔）
+        5) 群号 123456
+        尾部允许空格/换行。
+        返回 True 表示已处理；False 表示不匹配。
         """
-        if not (self.owner_qq and str(event.get_sender_id()) == self.owner_qq):
+        sender = str(event.get_sender_id())
+        # 调试日志：确认 owner 与 sender
+        logger.debug(f"[leave-cmd] owner_qq={self.owner_qq!r} sender={sender!r} msg={message_str!r}")
+
+        if not (self.owner_qq and sender == self.owner_qq):
             return False
 
-        m = re.match(r"^(?:退群#|群号#)\s*(\d{4,12})$", message_str)
+        text = message_str.strip()
+
+        # 1) 退群# / 群号#（支持半角#和全角＃），允许末尾空白
+        m = re.match(r"^(?:退群[#＃]|群号[#＃])\s*(\d{4,12})\s*$", text)
+        # 2) 退群 123 / 群号 123（空格分隔）
         if not m:
+            m = re.match(r"^(?:退群|群号)\s+(\d{4,12})\s*$", text)
+
+        if not m:
+            logger.debug("[leave-cmd] pattern not matched")
             return False
 
         target_gid = m.group(1)
         cur_gid = event.get_group_id()
 
-        # 先在当前群里回执
+        # 当前群内回执
         try:
             await event.bot.send_group_msg(
                 group_id=int(cur_gid),
                 message=f"群号:{target_gid}\n已退群！！！"
             )
         except Exception as e:
-            logger.error(f"退群命令回执失败（当前群={cur_gid} 目标群={target_gid}）：{e}")
+            logger.error(f"[leave-cmd] 回执失败（当前群={cur_gid} 目标群={target_gid}）：{e}")
 
-        # 在目标群里发送告别消息，然后退群
+        # 在目标群里发送告别
         try:
-            # 告别
             await event.bot.send_group_msg(group_id=int(target_gid), message="宝宝们,有缘再见~")
         except Exception as e:
-            logger.error(f"给目标群({target_gid})发送告别消息失败：{e}")
+            logger.error(f"[leave-cmd] 给目标群({target_gid})发送告别失败：{e}")
 
+        # 退群（兼容不同适配器参数）
         try:
-            # 退群
-            await event.bot.set_group_leave(group_id=int(target_gid))
-            logger.info(f"已退出群 {target_gid}")
+            try:
+                await event.bot.set_group_leave(group_id=int(target_gid))
+            except TypeError:
+                await event.bot.set_group_leave(group_id=int(target_gid), is_dismiss=False)
+            logger.info(f"[leave-cmd] 已退出群 {target_gid}")
         except Exception as e:
-            logger.error(f"退出群({target_gid})失败：{e}")
-            # 可选：在当前群提示失败原因
+            logger.error(f"[leave-cmd] 退出群({target_gid})失败：{e}")
             try:
                 await event.bot.send_group_msg(group_id=int(cur_gid), message=f"退出群 {target_gid} 失败：{e}")
             except Exception:
