@@ -12,12 +12,12 @@
     "type": "object",
     "items": {
       "spam_count": {
-        "description": "检测在X秒发送X条信息(3条)",
+        "description": "检测在X秒发送X条信息(默认3条)",
         "type": "int",
         "default": 3
       },
       "spam_interval": {
-        "description": "检测在X秒(1秒)",
+        "description": "检测在X秒内(默认1秒)",
         "type": "int",
         "default": 1
       },
@@ -65,7 +65,7 @@
         "items": {
           "type": "string"
         },
-        "hint": "白名单用户将跳过违禁词/广告/卡片/号码/针对撤回，但仍会触发刷屏检测",
+        "hint": "白名单用户将跳过违禁词/广告/卡片/号码/转发/针对撤回，但仍会触发刷屏检测",
         "default": []
       },
       "recall_links": {
@@ -83,6 +83,11 @@
         "type": "bool",
         "default": false
       },
+      "recall_forward": {
+        "description": "是否开启转发消息撤回（合并转发/多条组合消息）",
+        "type": "bool",
+        "default": false
+      },
       "auto_accept_owner_invite": {
         "description": "是否自动同意主人邀请入群",
         "type": "bool",
@@ -96,12 +101,12 @@
     }
   },
   "auto_replies": {
-    "description": "自动关键词回复（格式：关键词-回复内容）",
+    "description": "自动关键词回复（格式：关键词-回复内容，支持 {face:ID} 表情变量）",
     "type": "list",
     "items": {
       "type": "string"
     },
-    "hint": "每条用 - 分隔关键词和回复内容，例如：'6-你在6什么?'，'早-早上好阿'",
+    "hint": "每条用 - 分隔关键词和回复内容，例如：'6-你在6什么? {face:66}'，'早-早上好阿{face:14}'",
     "default": []
   }
 }
