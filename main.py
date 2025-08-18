@@ -399,7 +399,7 @@ class AutoRecallKeywordPlugin(Star):
         return True
 
     # =========================================================
-    # 新增：请求“我要看美女”视频 URL 并返回
+    # 新增：请求“我要看美女”视频 URL 并返回（加日志与容错）
     # =========================================================
     async def _fetch_beauty_video_url(self) -> str | None:
         if aiohttp is None:
@@ -407,7 +407,6 @@ class AutoRecallKeywordPlugin(Star):
 
         api_url = "http://api.xiaomei520.sbs/api/jk/"
 
-        # 小工具：多编码解码尝试
         def _smart_decode(b: bytes) -> str:
             for enc in ("utf-8", "gbk", "gb2312", "big5", "latin-1"):
                 try:
@@ -416,48 +415,79 @@ class AutoRecallKeywordPlugin(Star):
                     continue
             return b.decode("utf-8", errors="ignore")
 
+        async def _extract_url_from_text(txt: str) -> str | None:
+            # 更强的 URL 抽取：优先常见视频后缀，其次任意 http/https
+            m = re.search(r"https?://[^\s\"'<>]+?\.(?:mp4|m3u8)(?:\?[^\s\"'<>]+)?", txt, re.I)
+            if m:
+                return m.group(0)
+            m = re.search(r"https?://[^\s\"'<>]+", txt, re.I)
+            if m:
+                return m.group(0)
+            return None
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; YouGroupBot/1.0; +https://github.com/QingBaoNie/YouGroup-management)",
+            "Accept": "*/*",
+        }
+
         try:
-            timeout = aiohttp.ClientTimeout(total=12)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(api_url) as resp:
-                    raw = await resp.read()
-                    if not raw:
-                        return None
+            timeout = aiohttp.ClientTimeout(total=15, connect=8, sock_read=12)
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                for attempt in range(2):  # 轻度重试
+                    async with session.get(api_url, allow_redirects=True) as resp:
+                        raw = await resp.read()
+                        status = resp.status
+                        ctype = resp.headers.get("Content-Type", "")
+                        logger.debug(f"[美女接口] status={status} content-type={ctype} len={len(raw)}")
 
-                    # 先尝试 JSON
-                    try:
-                        # 跳过 content_type 限制，避免 header 不规范
-                        data = await resp.json(content_type=None)
-                    except Exception:
+                        if not raw:
+                            continue
+
+                        # 1) 尝试 JSON
+                        data = None
                         try:
-                            txt = _smart_decode(raw)
-                            data = json.loads(txt)
+                            data = await resp.json(content_type=None)
                         except Exception:
-                            data = None
+                            try:
+                                txt = _smart_decode(raw)
+                                data = json.loads(txt)
+                            except Exception:
+                                data = None
 
-                    if isinstance(data, dict):
-                        for k in ("url", "video", "mp4", "data"):
-                            v = data.get(k)
-                            if isinstance(v, str) and v.startswith("http"):
-                                return v
-                        # JSON 里扫一遍所有 URL
-                        joined = json.dumps(data, ensure_ascii=False)
-                        m = re.search(r"https?://[^\s\"'}]+", joined)
-                        if m:
-                            return m.group(0)
-                        return None
+                        if isinstance(data, dict):
+                            # 常见字段 + 扫描 JSON 中的任意 URL
+                            for k in ("url", "video", "mp4", "data", "src"):
+                                v = data.get(k)
+                                if isinstance(v, str) and v.startswith("http"):
+                                    logger.debug(f"[美女接口] json-hit: {k}={v}")
+                                    return v
+                            joined = json.dumps(data, ensure_ascii=False)
+                            url = await _extract_url_from_text(joined)
+                            if url:
+                                logger.debug(f"[美女接口] json-scan url={url}")
+                                return url
 
-                    # 如果不是 JSON，当纯文本处理
-                    txt = _smart_decode(raw)
-                    m = re.search(r"https?://[^\s\"'}]+", txt)
-                    if m:
-                        return m.group(0)
+                        # 2) 退回纯文本正则
+                        txt = _smart_decode(raw)
+                        logger.debug(f"[美女接口] body-preview={txt[:200]!r}")
+                        url = await _extract_url_from_text(txt)
+                        if not url:
+                            continue
+
+                        # 3) 用 HEAD/GET 试探 URL 是否能直接作为视频（不强求）
+                        try:
+                            async with session.head(url, allow_redirects=True) as h:
+                                h_ctype = h.headers.get("Content-Type", "")
+                                logger.debug(f"[美女接口] head url={url} ctype={h_ctype}")
+                        except Exception:
+                            pass
+
+                        return url
 
         except Exception as e:
             logger.error(f"调用美女接口失败: {e}")
 
         return None
-
 
     # =========================================================
     # 刷屏累加并视情况禁言 + 批量撤回（统一入口）
@@ -501,21 +531,16 @@ class AutoRecallKeywordPlugin(Star):
         if handled:
             return
 
-        # ---------- 新增：我要看美女（10s 冷却/群） ----------
+                # ---------- 新增：我要看美女（10s 冷却/群） ----------
         if "我要看美女" in message_str:
             now = time.time()
             last = self.beauty_last_time.get(group_id, 0)
             if now - last < self.beauty_cooldown:
                 remain = int(self.beauty_cooldown - (now - last))
                 try:
-                    resp = await event.bot.send_group_msg(
-                        group_id=int(group_id),
-                        message=f"别急呀~ 冷却中 {remain}s"
-                    )
+                    resp = await event.bot.send_group_msg(group_id=int(group_id), message=f"别急呀~ 冷却中 {remain}s")
                     if isinstance(resp, dict) and "message_id" in resp:
-                        asyncio.create_task(
-                            self._auto_delete_after(event.bot, resp["message_id"], delay=8)
-                        )
+                        asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=8))
                 except Exception as e:
                     logger.error(f"发送冷却提示失败: {e}")
                 return
@@ -523,26 +548,20 @@ class AutoRecallKeywordPlugin(Star):
             video_url = await self._fetch_beauty_video_url()
             if not video_url:
                 try:
-                    await event.bot.send_group_msg(
-                        group_id=int(group_id),
-                        message="接口开小差了，一会儿再试下~"
-                    )
+                    await event.bot.send_group_msg(group_id=int(group_id), message="接口开小差了，一会儿再试下~")
                 except Exception as e:
                     logger.error(f"发送接口失败提示异常: {e}")
                 return
 
-            # 优先尝试视频段，失败则发链接
+            logger.debug(f"[美女接口] final url={video_url}")
+
             try:
-                msg_seg = [{
-                    "type": "video",
-                    "data": {
-                        "file": video_url,
-                        "cache": 0,
-                        "proxy": 1,
-                        "timeout": 60
-                    }
-                }]
-                await event.bot.send_group_msg(group_id=int(group_id), message=msg_seg)
+                # m3u8 多为流媒体，OneBot 不一定能直接发，退回链接
+                if video_url.lower().endswith(".m3u8"):
+                    await event.bot.send_group_msg(group_id=int(group_id), message=video_url)
+                else:
+                    msg_seg = [{"type": "video", "data": {"file": video_url}}]
+                    await event.bot.send_group_msg(group_id=int(group_id), message=msg_seg)
             except Exception as e:
                 logger.error(f"发送视频段失败，回退为链接: {e}")
                 try:
@@ -552,6 +571,7 @@ class AutoRecallKeywordPlugin(Star):
             finally:
                 self.beauty_last_time[group_id] = now
             return
+
 
         # ---------- 自动回复（带冷却） ----------
         now_time = time.time()
