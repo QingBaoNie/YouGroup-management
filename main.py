@@ -16,7 +16,7 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import Aioc
     "YouGroup-management",
     "You",
     "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群+查询违规)",
-    "1.2.3",
+    "1.2.4",
     "https://github.com/QingBaoNie/YouGroup-management"
 )
 class AutoRecallKeywordPlugin(Star):
@@ -428,6 +428,34 @@ class AutoRecallKeywordPlugin(Star):
         return True
 
     # =========================================================
+    # 刷屏累加并视情况禁言 + 批量撤回（统一入口，供“针对”等提前返回的路径调用）【新增】
+    # =========================================================
+    async def _spam_bump_and_maybe_ban(self, event: AstrMessageEvent, group_id: int, sender_id: int, message_id: int, now: float = None):
+        now = now or time.time()
+        key = (group_id, sender_id)
+        self.user_message_times[key].append(now)
+        self.user_message_ids[key].append(message_id)
+
+        # 窗口满且在阈值内 => 触发刷屏处置
+        if len(self.user_message_times[key]) == self.spam_count:
+            if now - self.user_message_times[key][0] <= self.spam_interval:
+                if await self._bot_is_admin(event, int(group_id)):
+                    try:
+                        await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
+                        logger.error(f"触发【刷屏】已禁言 uid={sender_id} {self.spam_ban_duration}s，gid={group_id}")
+                    except Exception as e:
+                        logger.error(f"刷屏禁言失败 gid={group_id} uid={sender_id}: {e}")
+                    # 批量撤回窗口内消息
+                    for mid in list(self.user_message_ids[key]):
+                        try:
+                            await event.bot.delete_msg(message_id=mid)
+                        except Exception as e:
+                            logger.error(f"刷屏批量撤回失败 mid={mid}: {e}")
+                # 清空计数窗口（无论是否有管理权限）
+                self.user_message_times[key].clear()
+                self.user_message_ids[key].clear()
+
+    # =========================================================
     # 核心入口：群消息自动处理
     # =========================================================
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
@@ -508,7 +536,10 @@ class AutoRecallKeywordPlugin(Star):
         # ---------- 白名单/针对名单 ----------
         is_whitelisted = str(sender_id) in self.whitelist
         if not is_whitelisted and (str(sender_id) in self.target_user_list):
-            await event.bot.delete_msg(message_id=message_id)
+            # 先纳入刷屏检测窗口（防止“针对”被速发冲破）
+            await self._spam_bump_and_maybe_ban(event, group_id, sender_id, message_id)
+            # 再撤回当前消息
+            await self.try_recall(event, message_id, group_id, sender_id)
             return
 
         # ---------- 超长文本撤回（可见文字长度阈值）【新增】 ----------
