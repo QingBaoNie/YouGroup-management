@@ -53,7 +53,12 @@ class AutoRecallKeywordPlugin(Star):
 
         # 新增：看美女冷却（按群）
         self.beauty_last_time = {}
-        self.beauty_cooldown = 10  # 秒
+        self.beauty_cooldown = 10  # 秒（接口访问限频）
+
+        # 新增：视频发送限频（按群）
+        self.video_last_time = {}
+        self.video_cooldown = 30  # 秒（发送视频防刷屏）
+
 
     # =========================================================
     # 初始化配置（从外部 config 注入、解析开关、打印日志）
@@ -518,20 +523,35 @@ class AutoRecallKeywordPlugin(Star):
         if handled:
             return
 
-                # ---------- 新增：我要看美女（10s 冷却/群） ----------
+        # ---------- 新增：我要看美女（视频30s限频 + 接口10s限频/群） ----------
         if "我要看美女" in message_str:
             now = time.time()
-            last = self.beauty_last_time.get(group_id, 0)
-            if now - last < self.beauty_cooldown:
-                remain = int(self.beauty_cooldown - (now - last))
+
+            # (1) 先检查【视频发送】30s 限频，未到直接拒绝并提示
+            last_video = self.video_last_time.get(group_id, 0)
+            if now - last_video < self.video_cooldown:
+                try:
+                    # 需求文案：不发！少🦌行不行！
+                    resp = await event.bot.send_group_msg(group_id=int(group_id), message="不发！少🦌行不行！")
+                    if isinstance(resp, dict) and "message_id" in resp:
+                        asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=8))
+                except Exception as e:
+                    logger.error(f"发送30秒限制提示失败: {e}")
+                return
+
+            # (2) 再检查【接口访问】10s 限频（避免频繁打接口）
+            last_api = self.beauty_last_time.get(group_id, 0)
+            if now - last_api < self.beauty_cooldown:
+                remain = int(self.beauty_cooldown - (now - last_api))
                 try:
                     resp = await event.bot.send_group_msg(group_id=int(group_id), message=f"别急呀~ 冷却中 {remain}s")
                     if isinstance(resp, dict) and "message_id" in resp:
                         asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=8))
                 except Exception as e:
-                    logger.error(f"发送冷却提示失败: {e}")
+                    logger.error(f"发送接口冷却提示失败: {e}")
                 return
 
+            # (3) 调接口取视频
             video_url = await self._fetch_beauty_video_url()
             if not video_url:
                 try:
@@ -542,8 +562,8 @@ class AutoRecallKeywordPlugin(Star):
 
             logger.debug(f"[美女接口] final url={video_url}")
 
+            # (4) 尝试发送视频；m3u8 退回链接
             try:
-                # m3u8 多为流媒体，OneBot 不一定能直接发，退回链接
                 if video_url.lower().endswith(".m3u8"):
                     await event.bot.send_group_msg(group_id=int(group_id), message=video_url)
                 else:
@@ -556,8 +576,11 @@ class AutoRecallKeywordPlugin(Star):
                 except Exception as e2:
                     logger.error(f"发送视频链接也失败: {e2}")
             finally:
+                # 成功或已尝试发送后，记录两种冷却时间
+                self.video_last_time[group_id] = now
                 self.beauty_last_time[group_id] = now
             return
+
 
 
         # ---------- 自动回复（带冷却） ----------
