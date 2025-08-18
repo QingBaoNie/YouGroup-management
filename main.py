@@ -16,7 +16,7 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import Aioc
     "YouGroup-management",
     "You",
     "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群+查询违规)",
-    "1.2.2",
+    "1.2.3",
     "https://github.com/QingBaoNie/YouGroup-management"
 )
 class AutoRecallKeywordPlugin(Star):
@@ -87,6 +87,13 @@ class AutoRecallKeywordPlugin(Star):
         self.recall_numbers = _to_bool(admin_config.get("recall_numbers", False))  # 连续数字撤回
         self.recall_forward = _to_bool(admin_config.get("recall_forward", False))  # 合并转发/组合消息撤回
 
+        # --- 超长文本撤回配置（新增） ---
+        self.recall_long_text = _to_bool(admin_config.get("recall_long_text", True))   # 是否启用超长文本撤回
+        try:
+            self.max_text_length = int(admin_config.get("max_text_length", 100))       # 可见文本长度阈值
+        except Exception:
+            self.max_text_length = 100
+
         # --- 入群邀请策略 ---
         self.auto_accept_owner_invite = _to_bool(admin_config.get("auto_accept_owner_invite", True))
         self.reject_non_owner_invite  = _to_bool(admin_config.get("reject_non_owner_invite", True))
@@ -105,6 +112,7 @@ class AutoRecallKeywordPlugin(Star):
         logger.info(f"刷屏检测配置: {self.spam_count}条/{self.spam_interval}s 禁言{self.spam_ban_duration}s")
         logger.info(f"子管理员: {self.sub_admin_list} 黑名单: {self.kick_black_list} 针对名单: {self.target_user_list} 白名单: {self.whitelist}")
         logger.info(f"撤回配置: links={self.recall_links}, cards={self.recall_cards}, numbers={self.recall_numbers}, forward={self.recall_forward}")
+        logger.info(f"超长文本撤回: enable={self.recall_long_text}, max_text_length={self.max_text_length}")
         logger.info(f"入群邀请: auto_accept_owner_invite={self.auto_accept_owner_invite}, reject_non_owner_invite={self.reject_non_owner_invite}")
 
     # =========================================================
@@ -193,6 +201,42 @@ class AutoRecallKeywordPlugin(Star):
         if "转发消息" in message_str:
             return True
         return False
+
+    # =========================================================
+    # 工具函数：提取“可见文本”长度（忽略CQ段与零宽等）【新增】
+    # =========================================================
+    def _visible_text_length(self, event: AstrMessageEvent, message_str: str) -> int:
+        text_buf = []
+
+        # 优先从分段中抽取 text
+        try:
+            for seg in getattr(event.message_obj, 'message', []):
+                if isinstance(seg, dict):
+                    s_type = (seg.get("type") or "").lower()
+                    if s_type in ("text", "text_plain", "plain"):
+                        data = seg.get("data", {})
+                        t = data.get("text", "")
+                        if isinstance(t, str):
+                            text_buf.append(t)
+                else:
+                    s_type = (getattr(seg, "type", "") or "").lower()
+                    if s_type in ("text", "text_plain", "plain"):
+                        t = getattr(getattr(seg, "data", None), "text", None) or getattr(seg, "text", "")
+                        if isinstance(t, str):
+                            text_buf.append(t)
+        except Exception:
+            pass
+
+        # 若无分段文本，则从原串粗略去CQ
+        if not text_buf:
+            s = re.sub(r"\[CQ:[^\]]+\]", "", message_str)
+        else:
+            s = "".join(text_buf)
+
+        # 去常见零宽/控制类
+        s = s.replace("\u200b", "").replace("\u2060", "").replace("\u2061", "").replace("\u2062", "").replace("\u2063", "")
+        s = s.strip()
+        return len(s)
 
     # =========================================================
     # 权限：获取成员角色、判断是否操作者（主人/群管/子管理员）
@@ -466,6 +510,17 @@ class AutoRecallKeywordPlugin(Star):
         if not is_whitelisted and (str(sender_id) in self.target_user_list):
             await event.bot.delete_msg(message_id=message_id)
             return
+
+        # ---------- 超长文本撤回（可见文字长度阈值）【新增】 ----------
+        if (not is_whitelisted) and self.recall_long_text:
+            try:
+                vlen = self._visible_text_length(event, message_str)
+                if vlen >= self.max_text_length:
+                    logger.error(f"触发【超长文本】可见长度={vlen} 阈值={self.max_text_length}，已静默撤回 sender={sender_id} gid={group_id}")
+                    await self.try_recall(event, message_id, group_id, sender_id)
+                    return
+            except Exception as e:
+                logger.error(f"超长文本检测异常: {e}")
 
         # ---------- 违禁词撤回（需机器人有管理权限） ----------
         if not is_whitelisted:
