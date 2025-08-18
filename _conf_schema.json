@@ -93,6 +93,16 @@
         "type": "bool",
         "default": false
       },
+      "recall_long_text": {
+        "description": "是否开启超长文本撤回",
+        "type": "bool",
+        "default": true
+      },
+      "max_text_length": {
+        "description": "单条消息可见文字最大长度阈值，超出则撤回",
+        "type": "int",
+        "default": 100
+      },
       "auto_accept_owner_invite": {
         "description": "是否自动同意主人邀请入群",
         "type": "bool",
