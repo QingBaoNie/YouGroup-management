@@ -399,7 +399,7 @@ class AutoRecallKeywordPlugin(Star):
         return True
 
     # =========================================================
-    # 新增：请求“我要看美女”视频 URL 并返回（加日志与容错）
+    # 新增：请求“我要看美女”视频 URL 并返回（带详细日志）
     # =========================================================
     async def _fetch_beauty_video_url(self) -> str | None:
         if aiohttp is None:
@@ -415,78 +415,55 @@ class AutoRecallKeywordPlugin(Star):
                     continue
             return b.decode("utf-8", errors="ignore")
 
-        async def _extract_url_from_text(txt: str) -> str | None:
-            # 更强的 URL 抽取：优先常见视频后缀，其次任意 http/https
-            m = re.search(r"https?://[^\s\"'<>]+?\.(?:mp4|m3u8)(?:\?[^\s\"'<>]+)?", txt, re.I)
-            if m:
-                return m.group(0)
-            m = re.search(r"https?://[^\s\"'<>]+", txt, re.I)
-            if m:
-                return m.group(0)
-            return None
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; YouGroupBot/1.0; +https://github.com/QingBaoNie/YouGroup-management)",
-            "Accept": "*/*",
-        }
-
         try:
-            timeout = aiohttp.ClientTimeout(total=15, connect=8, sock_read=12)
-            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-                for attempt in range(2):  # 轻度重试
-                    async with session.get(api_url, allow_redirects=True) as resp:
-                        raw = await resp.read()
-                        status = resp.status
-                        ctype = resp.headers.get("Content-Type", "")
-                        logger.debug(f"[美女接口] status={status} content-type={ctype} len={len(raw)}")
+            timeout = aiohttp.ClientTimeout(total=12)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(api_url) as resp:
+                    raw = await resp.read()
+                    status = resp.status
+                    ctype = resp.headers.get("Content-Type", "")
+                    logger.debug(f"[美女接口] status={status} content-type={ctype} len={len(raw)}")
 
-                        if not raw:
-                            continue
+                    if not raw:
+                        logger.warning("[美女接口] 返回空响应")
+                        return None
 
-                        # 1) 尝试 JSON
-                        data = None
+                    txt_preview = _smart_decode(raw)[:200]
+                    logger.debug(f"[美女接口] body-preview={txt_preview!r}")
+
+                    # 尝试解析 JSON
+                    try:
+                        data = await resp.json(content_type=None)
+                    except Exception:
                         try:
-                            data = await resp.json(content_type=None)
+                            txt = _smart_decode(raw)
+                            data = json.loads(txt)
                         except Exception:
-                            try:
-                                txt = _smart_decode(raw)
-                                data = json.loads(txt)
-                            except Exception:
-                                data = None
+                            data = None
 
-                        if isinstance(data, dict):
-                            # 常见字段 + 扫描 JSON 中的任意 URL
-                            for k in ("url", "video", "mp4", "data", "src"):
-                                v = data.get(k)
-                                if isinstance(v, str) and v.startswith("http"):
-                                    logger.debug(f"[美女接口] json-hit: {k}={v}")
-                                    return v
-                            joined = json.dumps(data, ensure_ascii=False)
-                            url = await _extract_url_from_text(joined)
-                            if url:
-                                logger.debug(f"[美女接口] json-scan url={url}")
-                                return url
+                    if isinstance(data, dict):
+                        for k in ("url", "video", "mp4", "data", "src"):
+                            v = data.get(k)
+                            if isinstance(v, str) and v.startswith("http"):
+                                logger.debug(f"[美女接口] json-hit: {k}={v}")
+                                return v
+                        joined = json.dumps(data, ensure_ascii=False)
+                        m = re.search(r"https?://[^\s\"'}]+", joined)
+                        if m:
+                            logger.debug(f"[美女接口] json-scan url={m.group(0)}")
+                            return m.group(0)
 
-                        # 2) 退回纯文本正则
-                        txt = _smart_decode(raw)
-                        logger.debug(f"[美女接口] body-preview={txt[:200]!r}")
-                        url = await _extract_url_from_text(txt)
-                        if not url:
-                            continue
-
-                        # 3) 用 HEAD/GET 试探 URL 是否能直接作为视频（不强求）
-                        try:
-                            async with session.head(url, allow_redirects=True) as h:
-                                h_ctype = h.headers.get("Content-Type", "")
-                                logger.debug(f"[美女接口] head url={url} ctype={h_ctype}")
-                        except Exception:
-                            pass
-
-                        return url
+                    # 如果不是 JSON，当纯文本处理
+                    txt = _smart_decode(raw)
+                    m = re.search(r"https?://[^\s\"'}]+", txt)
+                    if m:
+                        logger.debug(f"[美女接口] text-scan url={m.group(0)}")
+                        return m.group(0)
 
         except Exception as e:
             logger.error(f"调用美女接口失败: {e}")
 
+        logger.warning("[美女接口] 未解析到有效 URL")
         return None
 
     # =========================================================
