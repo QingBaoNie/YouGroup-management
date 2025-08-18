@@ -404,18 +404,38 @@ class AutoRecallKeywordPlugin(Star):
     async def _fetch_beauty_video_url(self) -> str | None:
         if aiohttp is None:
             return None
-        # 更新后的接口地址
+
         api_url = "http://api.xiaomei520.sbs/api/jk/"
+
+        # 小工具：多编码解码尝试
+        def _smart_decode(b: bytes) -> str:
+            for enc in ("utf-8", "gbk", "gb2312", "big5", "latin-1"):
+                try:
+                    return b.decode(enc)
+                except Exception:
+                    continue
+            return b.decode("utf-8", errors="ignore")
+
         try:
-            timeout = aiohttp.ClientTimeout(total=10)
+            timeout = aiohttp.ClientTimeout(total=12)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(api_url) as resp:
-                    text = await resp.text()
-                    if not text:
+                    raw = await resp.read()
+                    if not raw:
                         return None
+
                     # 先尝试 JSON
                     try:
-                        data = json.loads(text)
+                        # 跳过 content_type 限制，避免 header 不规范
+                        data = await resp.json(content_type=None)
+                    except Exception:
+                        try:
+                            txt = _smart_decode(raw)
+                            data = json.loads(txt)
+                        except Exception:
+                            data = None
+
+                    if isinstance(data, dict):
                         for k in ("url", "video", "mp4", "data"):
                             v = data.get(k)
                             if isinstance(v, str) and v.startswith("http"):
@@ -425,15 +445,19 @@ class AutoRecallKeywordPlugin(Star):
                         m = re.search(r"https?://[^\s\"'}]+", joined)
                         if m:
                             return m.group(0)
-                    except Exception:
-                        pass
-                    # 如果是纯文本就直接提取 URL
-                    m = re.search(r"https?://[^\s\"'}]+", text)
+                        return None
+
+                    # 如果不是 JSON，当纯文本处理
+                    txt = _smart_decode(raw)
+                    m = re.search(r"https?://[^\s\"'}]+", txt)
                     if m:
                         return m.group(0)
+
         except Exception as e:
             logger.error(f"调用美女接口失败: {e}")
+
         return None
+
 
     # =========================================================
     # 刷屏累加并视情况禁言 + 批量撤回（统一入口）
@@ -484,9 +508,14 @@ class AutoRecallKeywordPlugin(Star):
             if now - last < self.beauty_cooldown:
                 remain = int(self.beauty_cooldown - (now - last))
                 try:
-                    resp = await event.bot.send_group_msg(group_id=int(group_id), message=f"别急呀~ 冷却中 {remain}s")
+                    resp = await event.bot.send_group_msg(
+                        group_id=int(group_id),
+                        message=f"别急呀~ 冷却中 {remain}s"
+                    )
                     if isinstance(resp, dict) and "message_id" in resp:
-                        asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=8))
+                        asyncio.create_task(
+                            self._auto_delete_after(event.bot, resp["message_id"], delay=8)
+                        )
                 except Exception as e:
                     logger.error(f"发送冷却提示失败: {e}")
                 return
@@ -494,14 +523,25 @@ class AutoRecallKeywordPlugin(Star):
             video_url = await self._fetch_beauty_video_url()
             if not video_url:
                 try:
-                    await event.bot.send_group_msg(group_id=int(group_id), message="接口开小差了，一会儿再试下~")
+                    await event.bot.send_group_msg(
+                        group_id=int(group_id),
+                        message="接口开小差了，一会儿再试下~"
+                    )
                 except Exception as e:
                     logger.error(f"发送接口失败提示异常: {e}")
                 return
 
             # 优先尝试视频段，失败则发链接
             try:
-                msg_seg = [{"type": "video", "data": {"file": video_url}}]
+                msg_seg = [{
+                    "type": "video",
+                    "data": {
+                        "file": video_url,
+                        "cache": 0,
+                        "proxy": 1,
+                        "timeout": 60
+                    }
+                }]
                 await event.bot.send_group_msg(group_id=int(group_id), message=msg_seg)
             except Exception as e:
                 logger.error(f"发送视频段失败，回退为链接: {e}")
