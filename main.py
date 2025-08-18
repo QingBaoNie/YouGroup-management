@@ -399,7 +399,7 @@ class AutoRecallKeywordPlugin(Star):
         return True
 
     # =========================================================
-    # 新增：请求“我要看美女”视频 URL 并返回（带详细日志）
+    # 新增：请求“我要看美女”视频 URL 并返回（支持重定向直链）
     # =========================================================
     async def _fetch_beauty_video_url(self) -> str | None:
         if aiohttp is None:
@@ -407,55 +407,64 @@ class AutoRecallKeywordPlugin(Star):
 
         api_url = "http://api.xiaomei520.sbs/api/jk/"
 
-        def _smart_decode(b: bytes) -> str:
-            for enc in ("utf-8", "gbk", "gb2312", "big5", "latin-1"):
-                try:
-                    return b.decode(enc)
-                except Exception:
-                    continue
-            return b.decode("utf-8", errors="ignore")
+        def _is_video_like_url(u: str) -> bool:
+            u = (u or "").lower()
+            return any(u.endswith(ext) for ext in (".mp4", ".m3u8", ".webm", ".mov", ".avi", ".flv"))
 
         try:
             timeout = aiohttp.ClientTimeout(total=12)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(api_url) as resp:
-                    raw = await resp.read()
-                    status = resp.status
-                    ctype = resp.headers.get("Content-Type", "")
-                    logger.debug(f"[美女接口] status={status} content-type={ctype} len={len(raw)}")
+                async with session.get(api_url, allow_redirects=True) as resp:
+                    # 记录重定向链与最终地址
+                    hist = " -> ".join(str(h.url) for h in resp.history) if resp.history else "(no-redirect)"
+                    final_url = str(resp.url)
+                    ctype = (resp.headers.get("Content-Type") or "").lower()
+                    clen  = resp.headers.get("Content-Length")
 
+                    logger.debug(f"[美女接口] status={resp.status} history={hist} final={final_url} ctype={ctype} clen={clen}")
+
+                    # 如果最终就是视频/二进制直链，直接返回，不读取大体积内容
+                    if "video/" in ctype or "application/octet-stream" in ctype or _is_video_like_url(final_url):
+                        logger.debug(f"[美女接口] detected direct video link: {final_url}")
+                        return final_url
+
+                    # 不是明显视频：只读少量预览字节，避免拉大文件
+                    raw = await resp.content.read(4096)
                     if not raw:
-                        logger.warning("[美女接口] 返回空响应")
+                        logger.warning("[美女接口] 空响应体（非视频）")
                         return None
 
-                    txt_preview = _smart_decode(raw)[:200]
-                    logger.debug(f"[美女接口] body-preview={txt_preview!r}")
+                    # 尝试各种编码解码做预览
+                    def _smart_decode(b: bytes) -> str:
+                        for enc in ("utf-8", "gbk", "gb2312", "big5", "latin-1"):
+                            try:
+                                return b.decode(enc)
+                            except Exception:
+                                continue
+                        return b.decode("utf-8", errors="ignore")
 
-                    # 尝试解析 JSON
+                    preview = _smart_decode(raw)
+                    logger.debug(f"[美女接口] body-preview={preview[:200]!r}")
+
+                    # 如果是 JSON，扫出 URL
                     try:
-                        data = await resp.json(content_type=None)
+                        data = json.loads(preview)
+                        if isinstance(data, dict):
+                            for k in ("url", "video", "mp4", "data", "src"):
+                                v = data.get(k)
+                                if isinstance(v, str) and v.startswith("http"):
+                                    logger.debug(f"[美女接口] json-hit: {k}={v}")
+                                    return v
+                            joined = json.dumps(data, ensure_ascii=False)
+                            m = re.search(r"https?://[^\s\"'}<>]+", joined)
+                            if m:
+                                logger.debug(f"[美女接口] json-scan url={m.group(0)}")
+                                return m.group(0)
                     except Exception:
-                        try:
-                            txt = _smart_decode(raw)
-                            data = json.loads(txt)
-                        except Exception:
-                            data = None
+                        pass
 
-                    if isinstance(data, dict):
-                        for k in ("url", "video", "mp4", "data", "src"):
-                            v = data.get(k)
-                            if isinstance(v, str) and v.startswith("http"):
-                                logger.debug(f"[美女接口] json-hit: {k}={v}")
-                                return v
-                        joined = json.dumps(data, ensure_ascii=False)
-                        m = re.search(r"https?://[^\s\"'}]+", joined)
-                        if m:
-                            logger.debug(f"[美女接口] json-scan url={m.group(0)}")
-                            return m.group(0)
-
-                    # 如果不是 JSON，当纯文本处理
-                    txt = _smart_decode(raw)
-                    m = re.search(r"https?://[^\s\"'}]+", txt)
+                    # 文本里直接提取 URL
+                    m = re.search(r"https?://[^\s\"'}<>]+", preview)
                     if m:
                         logger.debug(f"[美女接口] text-scan url={m.group(0)}")
                         return m.group(0)
@@ -463,8 +472,9 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"调用美女接口失败: {e}")
 
-        logger.warning("[美女接口] 未解析到有效 URL")
+        logger.warn("[美女接口] 未解析到有效 URL（可能服务器直接 302 到视频但被拦/跨域/鉴权）")
         return None
+
 
     # =========================================================
     # 刷屏累加并视情况禁言 + 批量撤回（统一入口）
