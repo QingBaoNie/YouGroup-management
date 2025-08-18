@@ -57,7 +57,7 @@ class AutoRecallKeywordPlugin(Star):
 
         # 新增：视频发送限频（按群）
         self.video_last_time = {}
-        self.video_cooldown = 30  # 秒（发送视频防刷屏）
+        self.video_cooldown = 60  # 秒（发送视频防刷屏）
 
 
     # =========================================================
