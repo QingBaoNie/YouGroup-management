@@ -1,5 +1,5 @@
 name: YouGroup-management
-version: 1.2.3
+version: 1.2.4
 author: You
 description: 敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群+查询违规)
 repo: https://github.com/QingBaoNie/YouGroup-management
