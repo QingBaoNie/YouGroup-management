@@ -23,7 +23,7 @@ except Exception:  # 兜底：如果环境没装 aiohttp，这里给出占位提
     "YouGroup-management",
     "You",
     "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群+查询违规+看美女)",
-    "1.2.6",
+    "1.2.7",
     "https://github.com/QingBaoNie/YouGroup-management"
 )
 class AutoRecallKeywordPlugin(Star):
@@ -51,13 +51,16 @@ class AutoRecallKeywordPlugin(Star):
         # 主人账号（从配置读取）
         self.owner_qq = ""
 
-        # 新增：看美女冷却（按群）
+        # 看美女冷却（按群）
         self.beauty_last_time = {}
         self.beauty_cooldown = 10  # 秒（接口访问限频）
 
-        # 新增：视频发送限频（按群）
+        # 视频发送限频（按群）
         self.video_last_time = {}
         self.video_cooldown = 60  # 秒（发送视频防刷屏）
+
+        # 入群事件短期去重：记录 (group_id, user_id)
+        self._join_seen = set()
 
     # =========================================================
     # 初始化配置（从外部 config 注入、解析开关、打印日志）
@@ -102,10 +105,10 @@ class AutoRecallKeywordPlugin(Star):
         self.recall_numbers = _to_bool(admin_config.get("recall_numbers", False))  # 连续数字撤回
         self.recall_forward = _to_bool(admin_config.get("recall_forward", False))  # 合并转发/组合消息撤回
 
-        # --- 超长文本撤回配置（新增） ---
-        self.recall_long_text = _to_bool(admin_config.get("recall_long_text", True))   # 是否启用超长文本撤回
+        # --- 超长文本撤回配置 ---
+        self.recall_long_text = _to_bool(admin_config.get("recall_long_text", True))
         try:
-            self.max_text_length = int(admin_config.get("max_text_length", 100))       # 可见文本长度阈值
+            self.max_text_length = int(admin_config.get("max_text_length", 100))
         except Exception:
             self.max_text_length = 100
 
@@ -173,7 +176,7 @@ class AutoRecallKeywordPlugin(Star):
         return not any(m in message_str for m in cq_like_markers)
 
     # =========================================================
-    # 工具函数：检测 @ 或 回复段（避免误撤回管理员操作等）
+    # 工具函数：检测 @ 或 回复段
     # =========================================================
     def _has_at_or_reply(self, event: AstrMessageEvent, message_str: str) -> bool:
         try:
@@ -187,7 +190,7 @@ class AutoRecallKeywordPlugin(Star):
         return ("[CQ:at" in message_str) or ("[CQ:reply" in message_str)
 
     # =========================================================
-    # 工具函数：号码标准化（去全角、分隔符、零宽符号）
+    # 工具函数：号码标准化
     # =========================================================
     def _normalize_for_number_check(self, s: str) -> str:
         full = "０１２３４５６７８９"
@@ -348,48 +351,38 @@ class AutoRecallKeywordPlugin(Star):
             return
 
     # =========================================================
-    # 新增：入群即踢黑（兼容多事件名/字段）
+    # 入群即踢黑（唯一监听 + 10 秒去重）
     # =========================================================
-    @filter.event_message_type(getattr(EventMessageType, "NOTICE", EventMessageType.GROUP_MESSAGE))
-    async def _on_group_member_increase_v1(self, event: AstrMessageEvent):
-        await self._handle_group_member_increase_common(event)
+    async def _expire_join_seen(self, key: tuple[int, int], ttl: int = 10):
+        await asyncio.sleep(ttl)
+        self._join_seen.discard(key)
 
-    @filter.event_message_type(getattr(EventMessageType, "GROUP_NOTICE", EventMessageType.GROUP_MESSAGE))
-    async def _on_group_member_increase_v2(self, event: AstrMessageEvent):
-        await self._handle_group_member_increase_common(event)
+    @filter.event_message_type(EventMessageType.GROUP_NOTICE)
+    async def _on_group_increase(self, event: AstrMessageEvent):
+        raw = getattr(event.message_obj, "raw_message", {}) or {}
+        # 仅处理真正的“入群”通知
+        if raw.get("post_type") != "notice":
+            return
+        if raw.get("notice_type") != "group_increase":
+            return
 
-    # 某些实现会把“成员变更”单列事件名
-    @filter.event_message_type(getattr(EventMessageType, "GROUP_MEMBER_INCREASE", EventMessageType.GROUP_MESSAGE))
-    async def _on_group_member_increase_v3(self, event: AstrMessageEvent):
-        await self._handle_group_member_increase_common(event)
-
-    async def _handle_group_member_increase_common(self, event: AstrMessageEvent):
-        """
-        统一解析“有人进群”的 notice，并对黑名单用户立即踢出。
-        兼容字段：
-          - notice_type: group_increase / group_member_increase / group_member
-          - 新成员ID: user_id / member_id / target_id
-          - sub_type: approve / invite / join（仅记录，不做强依赖）
-        """
         try:
-            raw = getattr(event.message_obj, "raw_message", {}) or {}
-            notice_type = (getattr(raw, "notice_type", None) or raw.get("notice_type"))
-            sub_type    = (getattr(raw, "sub_type", None)    or raw.get("sub_type"))
-            group_id    = (getattr(raw, "group_id", None)    or raw.get("group_id"))
-            new_member  = raw.get("user_id") or raw.get("member_id") or raw.get("target_id")
+            group_id = int(raw["group_id"])
+            user_id = int(raw.get("user_id") or raw.get("member_id") or 0)
+        except Exception:
+            return
+        if not user_id:
+            return
 
-            ok_ntype = {"group_increase", "group_member_increase", "group_member"}
-            if (notice_type not in ok_ntype) and (notice_type is not None):
-                return
-            if not group_id or not new_member:
-                logger.debug(f"[入群踢黑] 字段不完整，跳过。notice_type={notice_type} sub_type={sub_type} raw={raw}")
-                return
+        # 10 秒内去重，避免刷屏
+        key = (group_id, user_id)
+        if key in self._join_seen:
+            return
+        self._join_seen.add(key)
+        asyncio.create_task(self._expire_join_seen(key, ttl=10))
 
-            logger.info(f"[入群踢黑] 新成员加入 gid={group_id} uid={new_member} sub_type={sub_type}")
-            await self._kick_if_in_blacklist(event, int(group_id), int(new_member))
-
-        except Exception as e:
-            logger.error(f"[入群踢黑] 处理异常：{e}")
+        # 命中黑名单 -> 立刻踢
+        await self._kick_if_in_blacklist(event, group_id, user_id)
 
     # =========================================================
     # 新增工具：如果在黑名单，立即踢出（用于入群通知）
@@ -477,7 +470,7 @@ class AutoRecallKeywordPlugin(Star):
         return True
 
     # =========================================================
-    # 新增：请求“我要看美女”视频 URL 并返回（支持重定向直链）
+    # “我要看美女”视频 URL
     # =========================================================
     async def _fetch_beauty_video_url(self) -> str | None:
         if aiohttp is None:
@@ -493,7 +486,6 @@ class AutoRecallKeywordPlugin(Star):
             timeout = aiohttp.ClientTimeout(total=12)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(api_url, allow_redirects=True) as resp:
-                    # 记录重定向链与最终地址
                     hist = " -> ".join(str(h.url) for h in resp.history) if resp.history else "(no-redirect)"
                     final_url = str(resp.url)
                     ctype = (resp.headers.get("Content-Type") or "").lower()
@@ -501,18 +493,15 @@ class AutoRecallKeywordPlugin(Star):
 
                     logger.debug(f"[美女接口] status={resp.status} history={hist} final={final_url} ctype={ctype} clen={clen}")
 
-                    # 如果最终就是视频/二进制直链，直接返回，不读取大体积内容
                     if "video/" in ctype or "application/octet-stream" in ctype or _is_video_like_url(final_url):
                         logger.debug(f"[美女接口] detected direct video link: {final_url}")
                         return final_url
 
-                    # 不是明显视频：只读少量预览字节，避免拉大文件
                     raw = await resp.content.read(4096)
                     if not raw:
                         logger.warning("[美女接口] 空响应体（非视频）")
                         return None
 
-                    # 尝试各种编码解码做预览
                     def _smart_decode(b: bytes) -> str:
                         for enc in ("utf-8", "gbk", "gb2312", "big5", "latin-1"):
                             try:
@@ -524,7 +513,6 @@ class AutoRecallKeywordPlugin(Star):
                     preview = _smart_decode(raw)
                     logger.debug(f"[美女接口] body-preview={preview[:200]!r}")
 
-                    # 如果是 JSON，扫出 URL
                     try:
                         data = json.loads(preview)
                         if isinstance(data, dict):
@@ -541,7 +529,6 @@ class AutoRecallKeywordPlugin(Star):
                     except Exception:
                         pass
 
-                    # 文本里直接提取 URL
                     m = re.search(r"https?://[^\s\"'}<>]+", preview)
                     if m:
                         logger.debug(f"[美女接口] text-scan url={m.group(0)}")
@@ -569,7 +556,7 @@ class AutoRecallKeywordPlugin(Star):
                         logger.error(f"触发【刷屏】已禁言 uid={sender_id} {self.spam_ban_duration}s，gid={group_id}")
                     except Exception as e:
                         logger.error(f"刷屏禁言失败 gid={group_id} uid={sender_id}: {e}")
-                    for mid in list(self.user_message_ids[key]):  # 快照遍历，避免 deque 修改报错
+                    for mid in list(self.user_message_ids[key]):  # 快照遍历
                         try:
                             await event.bot.delete_msg(message_id=mid)
                         except Exception as e:
@@ -590,20 +577,17 @@ class AutoRecallKeywordPlugin(Star):
         message_str = event.message_str.strip()
         message_id = event.message_obj.message_id
 
-        # ---------- 主人主动退群命令（优先处理） ----------
+        # ---------- 主人主动退群命令 ----------
         handled = await self.handle_owner_leave_group(event, message_str)
         if handled:
             return
 
-        # ---------- 新增：我要看美女（视频30s限频 + 接口10s限频/群） ----------
+        # ---------- 我要看美女 ----------
         if "我要看美女" in message_str:
             now = time.time()
-
-            # (1) 先检查【视频发送】30s 限频，未到直接拒绝并提示
             last_video = self.video_last_time.get(group_id, 0)
             if now - last_video < self.video_cooldown:
                 try:
-                    # 需求文案：不发！少🦌行不行！
                     resp = await event.bot.send_group_msg(group_id=int(group_id), message="不发！少🦌行不行！")
                     if isinstance(resp, dict) and "message_id" in resp:
                         asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=8))
@@ -611,7 +595,6 @@ class AutoRecallKeywordPlugin(Star):
                     logger.error(f"发送30秒限制提示失败: {e}")
                 return
 
-            # (2) 再检查【接口访问】10s 限频（避免频繁打接口）
             last_api = self.beauty_last_time.get(group_id, 0)
             if now - last_api < self.beauty_cooldown:
                 remain = int(self.beauty_cooldown - (now - last_api))
@@ -623,7 +606,6 @@ class AutoRecallKeywordPlugin(Star):
                     logger.error(f"发送接口冷却提示失败: {e}")
                 return
 
-            # (3) 调接口取视频
             video_url = await self._fetch_beauty_video_url()
             if not video_url:
                 try:
@@ -634,7 +616,6 @@ class AutoRecallKeywordPlugin(Star):
 
             logger.debug(f"[美女接口] final url={video_url}")
 
-            # (4) 尝试发送视频；m3u8 退回链接
             try:
                 if video_url.lower().endswith(".m3u8"):
                     await event.bot.send_group_msg(group_id=int(group_id), message=video_url)
@@ -648,7 +629,6 @@ class AutoRecallKeywordPlugin(Star):
                 except Exception as e2:
                     logger.error(f"发送视频链接也失败: {e2}")
             finally:
-                # 成功或已尝试发送后，记录两种冷却时间
                 self.video_last_time[group_id] = now
                 self.beauty_last_time[group_id] = now
             return
@@ -707,7 +687,7 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
 
-        # ---------- 黑名单：直接踢出（发言触发兜底） ----------
+        # ---------- 黑名单：发言触发兜底 ----------
         if str(sender_id) in self.kick_black_list:
             await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
             await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
@@ -716,11 +696,11 @@ class AutoRecallKeywordPlugin(Star):
         # ---------- 白名单/针对名单 ----------
         is_whitelisted = str(sender_id) in self.whitelist
         if not is_whitelisted and (str(sender_id) in self.target_user_list):
-            await self._spam_bump_and_maybe_ban(event, group_id, sender_id, message_id)  # 防速发冲破
+            await self._spam_bump_and_maybe_ban(event, group_id, sender_id, message_id)
             await self.try_recall(event, message_id, group_id, sender_id)
             return
 
-        # ---------- 超长文本撤回（可见文字长度阈值） ----------
+        # ---------- 超长文本撤回 ----------
         if (not is_whitelisted) and self.recall_long_text:
             try:
                 vlen = self._visible_text_length(event, message_str)
@@ -787,7 +767,7 @@ class AutoRecallKeywordPlugin(Star):
                 if await self._bot_is_admin(event, int(group_id)):
                     logger.error(f"触发【刷屏】已禁言并批量撤回！")
                     await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
-                    for msg_id in list(self.user_message_ids[key]):  # 快照遍历，避免 deque 并发修改
+                    for msg_id in list(self.user_message_ids[key]):
                         try:
                             await event.bot.delete_msg(message_id=msg_id)
                         except Exception as e:
