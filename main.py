@@ -972,7 +972,7 @@ class AutoRecallKeywordPlugin(Star):
                 logger.error(f"发送无权限提示失败: {e}")
             return
 
-        # 无需目标QQ的命令（保留原逻辑）
+        # 无需目标QQ的命令
         if msg.startswith("全体禁言"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 全体禁言")
@@ -1032,7 +1032,7 @@ class AutoRecallKeywordPlugin(Star):
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
 
-        # 需要目标QQ的命令：支持 @xx 与 #QQ号
+        # 需要目标QQ的命令：支持 @ 与 #QQ号
         target_id = self._extract_target_from_msg(event, msg)
         if not target_id:
             logger.error("未检测到目标用户（缺少 @ 或 #QQ号）")
@@ -1041,7 +1041,7 @@ class AutoRecallKeywordPlugin(Star):
 
         logger.info(f"检测到命令针对 {target_id} | 原消息: {msg}")
 
-        # 小工具：解析消息尾部的整数（如“ … 5”）
+        # 解析消息尾部整数
         def _parse_tail_int(_msg: str, default_val: int) -> int:
             m = re.search(r"(\d+)\s*$", _msg)
             return int(m.group(1)) if m else default_val
@@ -1049,7 +1049,7 @@ class AutoRecallKeywordPlugin(Star):
         if msg.startswith("禁言"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 禁言")
-            minutes = _parse_tail_int(msg, 10)  # 默认10分钟
+            minutes = _parse_tail_int(msg, 10)
             duration = minutes * 60
             try:
                 await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=duration)
@@ -1066,7 +1066,7 @@ class AutoRecallKeywordPlugin(Star):
             except Exception as e:
                 logger.error(f"解禁失败 gid={group_id} uid={target_id}: {e}")
 
-                elif msg.startswith("踢黑"):
+        elif msg.startswith("踢黑"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 踢黑")
             try:
@@ -1083,7 +1083,7 @@ class AutoRecallKeywordPlugin(Star):
                     self.kick_black_list.add(target_id)
                     self.save_json_data()
 
-                # 当前群按规则处理踢出：机器人需为管理；目标若为管理则忽略
+                # 当前群按规则处理：机器人需为管理；目标若为管理则忽略
                 try:
                     t_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(target_id))
                     t_role = str(t_info.get("role", "member"))
@@ -1103,7 +1103,7 @@ class AutoRecallKeywordPlugin(Star):
                         await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
                     await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入踢黑名单并踢出")
 
-                # 兜底：异步巡检所有管理中的群并处理（静默，仅日志）
+                # 兜底：异步巡检所有管理群（静默，仅日志）
                 asyncio.create_task(self._kick_blacklist_in_all_admin_groups(event, target_id))
 
             except Exception as e:
@@ -1140,7 +1140,6 @@ class AutoRecallKeywordPlugin(Star):
             await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移出针对名单")
 
         elif msg.startswith("设置管理员"):
-            # 修正：这里必须用 and，而不是意外的中文“和”
             if self.owner_qq and str(sender_id) != self.owner_qq:
                 await event.bot.send_group_msg(group_id=int(group_id), message="只有主人才能设置管理员。")
                 return
@@ -1154,7 +1153,6 @@ class AutoRecallKeywordPlugin(Star):
                 await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已设为子管理员")
 
         elif msg.startswith("移除管理员"):
-            # 修正：and
             if self.owner_qq and str(sender_id) != self.owner_qq:
                 await event.bot.send_group_msg(group_id=int(group_id), message="只有主人才能移除管理员。")
                 return
@@ -1184,7 +1182,6 @@ class AutoRecallKeywordPlugin(Star):
         elif msg.startswith("撤回"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 撤回")
-            # 支持“撤回#QQ号 5”或“撤回@xx 5”，默认5条
             recall_count = _parse_tail_int(msg, 5)
             try:
                 history = await event.bot.get_group_msg_history(group_id=int(group_id), count=100)
