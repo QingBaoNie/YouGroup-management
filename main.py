@@ -23,7 +23,7 @@ except Exception:  # 兜底：如果环境没装 aiohttp，这里给出占位提
     "YouGroup-management",
     "You",
     "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群+查询违规+看美女)",
-    "1.2.5",
+    "1.2.6",
     "https://github.com/QingBaoNie/YouGroup-management"
 )
 class AutoRecallKeywordPlugin(Star):
@@ -58,7 +58,6 @@ class AutoRecallKeywordPlugin(Star):
         # 新增：视频发送限频（按群）
         self.video_last_time = {}
         self.video_cooldown = 60  # 秒（发送视频防刷屏）
-
 
     # =========================================================
     # 初始化配置（从外部 config 注入、解析开关、打印日志）
@@ -349,6 +348,80 @@ class AutoRecallKeywordPlugin(Star):
             return
 
     # =========================================================
+    # 新增：入群即踢黑（兼容多事件名/字段）
+    # =========================================================
+    @filter.event_message_type(getattr(EventMessageType, "NOTICE", EventMessageType.GROUP_MESSAGE))
+    async def _on_group_member_increase_v1(self, event: AstrMessageEvent):
+        await self._handle_group_member_increase_common(event)
+
+    @filter.event_message_type(getattr(EventMessageType, "GROUP_NOTICE", EventMessageType.GROUP_MESSAGE))
+    async def _on_group_member_increase_v2(self, event: AstrMessageEvent):
+        await self._handle_group_member_increase_common(event)
+
+    # 某些实现会把“成员变更”单列事件名
+    @filter.event_message_type(getattr(EventMessageType, "GROUP_MEMBER_INCREASE", EventMessageType.GROUP_MESSAGE))
+    async def _on_group_member_increase_v3(self, event: AstrMessageEvent):
+        await self._handle_group_member_increase_common(event)
+
+    async def _handle_group_member_increase_common(self, event: AstrMessageEvent):
+        """
+        统一解析“有人进群”的 notice，并对黑名单用户立即踢出。
+        兼容字段：
+          - notice_type: group_increase / group_member_increase / group_member
+          - 新成员ID: user_id / member_id / target_id
+          - sub_type: approve / invite / join（仅记录，不做强依赖）
+        """
+        try:
+            raw = getattr(event.message_obj, "raw_message", {}) or {}
+            notice_type = (getattr(raw, "notice_type", None) or raw.get("notice_type"))
+            sub_type    = (getattr(raw, "sub_type", None)    or raw.get("sub_type"))
+            group_id    = (getattr(raw, "group_id", None)    or raw.get("group_id"))
+            new_member  = raw.get("user_id") or raw.get("member_id") or raw.get("target_id")
+
+            ok_ntype = {"group_increase", "group_member_increase", "group_member"}
+            if (notice_type not in ok_ntype) and (notice_type is not None):
+                return
+            if not group_id or not new_member:
+                logger.debug(f"[入群踢黑] 字段不完整，跳过。notice_type={notice_type} sub_type={sub_type} raw={raw}")
+                return
+
+            logger.info(f"[入群踢黑] 新成员加入 gid={group_id} uid={new_member} sub_type={sub_type}")
+            await self._kick_if_in_blacklist(event, int(group_id), int(new_member))
+
+        except Exception as e:
+            logger.error(f"[入群踢黑] 处理异常：{e}")
+
+    # =========================================================
+    # 新增工具：如果在黑名单，立即踢出（用于入群通知）
+    # =========================================================
+    async def _kick_if_in_blacklist(self, event: AstrMessageEvent, group_id: int, user_id: int) -> bool:
+        uid = str(user_id)
+        if uid not in self.kick_black_list:
+            return False
+
+        # 需要机器人有管理权限
+        if not await self._bot_is_admin(event, int(group_id)):
+            logger.error(f"[入群踢黑] 发现黑名单 {uid} 但机器人非管理，无法踢出")
+            return False
+
+        try:
+            # 优先尝试拒绝再次加群；适配器不支持该参数时兜底
+            try:
+                await event.bot.set_group_kick(group_id=int(group_id), user_id=int(user_id), reject_add_request=True)
+            except TypeError:
+                await event.bot.set_group_kick(group_id=int(group_id), user_id=int(user_id))
+
+            logger.info(f"[入群踢黑] 黑名单用户 {uid} 已被踢出群 {group_id}")
+            try:
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {uid}，已自动踢出。")
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            logger.error(f"[入群踢黑] 踢出黑名单 {uid} 失败：{e}")
+            return False
+
+    # =========================================================
     # 自动回复：支持 {face:ID} 自动转 CQ 表情段
     # =========================================================
     def _parse_message_with_faces(self, text: str):
@@ -480,7 +553,6 @@ class AutoRecallKeywordPlugin(Star):
         logger.warn("[美女接口] 未解析到有效 URL（可能服务器直接 302 到视频但被拦/跨域/鉴权）")
         return None
 
-
     # =========================================================
     # 刷屏累加并视情况禁言 + 批量撤回（统一入口）
     # =========================================================
@@ -581,8 +653,6 @@ class AutoRecallKeywordPlugin(Star):
                 self.beauty_last_time[group_id] = now
             return
 
-
-
         # ---------- 自动回复（带冷却） ----------
         now_time = time.time()
         last_reply_time = self.auto_reply_last_time.get(group_id, 0)
@@ -637,7 +707,7 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
 
-        # ---------- 黑名单：直接踢出 ----------
+        # ---------- 黑名单：直接踢出（发言触发兜底） ----------
         if str(sender_id) in self.kick_black_list:
             await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
             await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
