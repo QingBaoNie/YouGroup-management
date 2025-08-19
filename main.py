@@ -357,37 +357,36 @@ class AutoRecallKeywordPlugin(Star):
         await asyncio.sleep(ttl)
         self._join_seen.discard(key)
 
-# 仅注册一次，向下兼容不同枚举：优先 NOTICE，缺了就退回 GROUP_MESSAGE
-@filter.event_message_type(getattr(EventMessageType, "NOTICE", EventMessageType.GROUP_MESSAGE))
-async def _on_group_increase(self, event: AstrMessageEvent):
-    raw = getattr(event.message_obj, "raw_message", {}) or {}
-    # 不是通知就不处理（若退回到了 GROUP_MESSAGE，这里会直接 return）
-    if str(raw.get("post_type", "")) != "notice":
-        return
+    # 仅注册一次，向下兼容不同枚举：优先 NOTICE，缺了就退回 GROUP_MESSAGE
+    @filter.event_message_type(getattr(EventMessageType, "NOTICE", EventMessageType.GROUP_MESSAGE))
+    async def _on_group_increase(self, event: AstrMessageEvent):
+        raw = getattr(event.message_obj, "raw_message", {}) or {}
+        # 不是通知就不处理（若退回到了 GROUP_MESSAGE，这里会直接 return）
+        if str(raw.get("post_type", "")) != "notice":
+            return
 
-    # 兼容多种“入群”标识
-    ntype = str(raw.get("notice_type", ""))
-    if ntype not in {"group_increase", "group_member_increase", "group_member"}:
-        return
+        # 兼容多种“入群”标识
+        ntype = str(raw.get("notice_type", ""))
+        if ntype not in {"group_increase", "group_member_increase", "group_member"}:
+            return
 
-    try:
-        group_id = int(raw["group_id"])
-        user_id = int(raw.get("user_id") or raw.get("member_id") or raw.get("target_id") or 0)
-    except Exception:
-        return
-    if not user_id:
-        return
+        try:
+            group_id = int(raw["group_id"])
+            user_id = int(raw.get("user_id") or raw.get("member_id") or raw.get("target_id") or 0)
+        except Exception:
+            return
+        if not user_id:
+            return
 
-    # 10 秒内去重，避免同一个人入群多次触发
-    key = (group_id, user_id)
-    if key in self._join_seen:
-        return
-    self._join_seen.add(key)
-    asyncio.create_task(self._expire_join_seen(key, ttl=10))
+        # 10 秒内去重，避免同一个人入群多次触发
+        key = (group_id, user_id)
+        if key in self._join_seen:
+            return
+        self._join_seen.add(key)
+        asyncio.create_task(self._expire_join_seen(key, ttl=10))
 
-    # 命中黑名单则立刻踢
-    await self._kick_if_in_blacklist(event, group_id, user_id)
-
+        # 命中黑名单则立刻踢
+        await self._kick_if_in_blacklist(event, group_id, user_id)
 
     # =========================================================
     # 新增工具：如果在黑名单，立即踢出（用于入群通知）
@@ -1018,7 +1017,7 @@ async def _on_group_increase(self, event: AstrMessageEvent):
                 await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已设为子管理员")
 
         elif msg.startswith("移除管理员"):
-            if self.owner_qq and str(sender_id) != self.owner_qq:
+            if self.owner_qq和str(sender_id) != self.owner_qq:
                 await event.bot.send_group_msg(group_id=int(group_id), message="只有主人才能移除管理员。")
                 return
             if hasattr(event, "mark_action"):
