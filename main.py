@@ -541,7 +541,7 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"调用美女接口失败: {e}")
 
-        logger.warn("[美女接口] 未解析到有效 URL（可能服务器直接 302 到视频但被拦/跨域/鉴权）")
+        logger.warning("[美女接口] 未解析到有效 URL（可能服务器直接 302 到视频但被拦/跨域/鉴权）")
         return None
 
     # =========================================================
@@ -693,8 +693,17 @@ class AutoRecallKeywordPlugin(Star):
 
         # ---------- 黑名单：发言触发兜底 ----------
         if str(sender_id) in self.kick_black_list:
-            await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
+            if await self._bot_is_admin(event, int(group_id)):
+                try:
+                    try:
+                        await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id), reject_add_request=True)
+                    except TypeError:
+                        await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
+                    await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
+                except Exception as e:
+                    logger.error(f"[黑名单兜底] 踢出失败 gid={group_id} uid={sender_id}: {e}")
+            else:
+                logger.info(f"[黑名单兜底] 发现黑名单 {sender_id} 在群 {group_id} 发言，但机器人非管理，忽略。")
             return
 
         # ---------- 白名单/针对名单 ----------
@@ -859,6 +868,67 @@ class AutoRecallKeywordPlugin(Star):
             )
             if isinstance(resp, dict) and "message_id" in resp:
                 asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=60))
+    # =========================================================
+    # 兜底：在所有管理中的群里踢出黑名单目标（静默，只记日志）
+    # 规则：
+    # - 机器人是群管 且 目标在群里 且 目标不是群管 => 踢
+    # - 目标是群管 => 不处理（静默日志）
+    # - 机器人不是群管 => 不处理（静默日志）
+    # =========================================================
+    async def _kick_blacklist_in_all_admin_groups(self, event: AstrMessageEvent, target_id: str):
+        # 拉取群列表（兼容多种返回结构）
+        try:
+            raw = await event.bot.get_group_list()
+            if isinstance(raw, list):
+                groups = raw
+            else:
+                groups = raw.get("data") or raw.get("groups") or []
+        except Exception as e:
+            logger.error(f"[踢黑兜底] 获取群列表失败：{e}")
+            return
+
+        # 逐群检查
+        for g in groups:
+            try:
+                gid = int(g.get("group_id") or g.get("gid") or g.get("group") or 0)
+            except Exception:
+                gid = 0
+            if not gid:
+                continue
+
+            # 先看目标是否在该群（不在会异常/空返回，直接跳过）
+            try:
+                member_info = await event.bot.get_group_member_info(group_id=gid, user_id=int(target_id))
+                target_role = str(member_info.get("role", "member"))
+            except Exception:
+                # 目标不在该群或无权限获取
+                continue
+
+            # 看机器人权限
+            try:
+                bot_is_admin = await self._bot_is_admin(event, gid)
+            except Exception:
+                bot_is_admin = False
+
+            if not bot_is_admin:
+                logger.info(f"[踢黑兜底] 发现黑名单 {target_id} 在群 {gid}，但机器人非管理，忽略。")
+                continue
+
+            # 目标是管理员/群主则不处理
+            if target_role in ("owner", "admin"):
+                logger.info(f"[踢黑兜底] 发现黑名单 {target_id} 在群 {gid} 且其为 {target_role}，按规则忽略。")
+                continue
+
+            # 动手踢（静默，不群发提示）
+            try:
+                try:
+                    await event.bot.set_group_kick(group_id=gid, user_id=int(target_id), reject_add_request=True)
+                except TypeError:
+                    await event.bot.set_group_kick(group_id=gid, user_id=int(target_id))
+                logger.info(f"[踢黑兜底] 已在群 {gid} 踢出黑名单 {target_id}")
+            except Exception as e:
+                logger.error(f"[踢黑兜底] 在群 {gid} 踢出 {target_id} 失败：{e}")
+
 
     # =========================================================
     # 工具：从消息里抽取目标QQ（优先 #QQ号，其次 @）
@@ -996,20 +1066,46 @@ class AutoRecallKeywordPlugin(Star):
             except Exception as e:
                 logger.error(f"解禁失败 gid={group_id} uid={target_id}: {e}")
 
-        elif msg.startswith("踢黑"):
+                elif msg.startswith("踢黑"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 踢黑")
             try:
+                # 防误操作：禁止把机器人或主人加入黑名单
+                self_id = await self._get_self_user_id(event)
+                if target_id in {self_id, str(self.owner_qq)}:
+                    await event.bot.send_group_msg(group_id=int(group_id), message="目标是机器人或主人，已忽略。")
+                    return
+
                 if target_id in self.kick_black_list:
                     await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已在黑名单，无需重复添加。")
                 else:
+                    # 先加入黑名单并持久化
                     self.kick_black_list.add(target_id)
                     self.save_json_data()
+
+                # 当前群按规则处理踢出：机器人需为管理；目标若为管理则忽略
+                try:
+                    t_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(target_id))
+                    t_role = str(t_info.get("role", "member"))
+                except Exception:
+                    t_role = "member"
+
+                bot_is_admin = await self._bot_is_admin(event, int(group_id))
+
+                if not bot_is_admin:
+                    logger.info(f"[踢黑命令] 机器人在群 {group_id} 非管理，无法踢当前群目标 {target_id}。")
+                elif t_role in ("owner", "admin"):
+                    logger.info(f"[踢黑命令] 目标 {target_id} 在群 {group_id} 为 {t_role}，按规则忽略当前群踢出。")
+                else:
                     try:
                         await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id), reject_add_request=True)
                     except TypeError:
                         await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
                     await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入踢黑名单并踢出")
+
+                # 兜底：异步巡检所有管理中的群并处理（静默，仅日志）
+                asyncio.create_task(self._kick_blacklist_in_all_admin_groups(event, target_id))
+
             except Exception as e:
                 logger.error(f"踢黑失败 gid={group_id} uid={target_id}: {e}")
 
@@ -1071,6 +1167,20 @@ class AutoRecallKeywordPlugin(Star):
             else:
                 await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 不在管理员列表中，无需移除。")
 
+        elif msg.startswith("加白"):
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 加白")
+            self.whitelist.add(target_id)
+            self.save_json_data()
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入白名单")
+
+        elif msg.startswith("移白"):
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 移白")
+            self.whitelist.discard(target_id)
+            self.save_json_data()
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已从白名单移除")
+
         elif msg.startswith("撤回"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 撤回")
@@ -1092,7 +1202,6 @@ class AutoRecallKeywordPlugin(Star):
                     except Exception as e:
                         logger.error(f"撤回 {target_id} 消息 {msg_data.get('message_id')} 失败: {e}")
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 的 {deleted} 条消息")
-
 
     # =========================================================
     # 插件卸载钩子
