@@ -569,6 +569,71 @@ class AutoRecallKeywordPlugin(Star):
                 self.user_message_ids[key].clear()
 
     # =========================================================
+    # 娱乐功能：封杀倒计时 + 最终尝试禁言60秒（不阻塞主流程）
+    # =========================================================
+    async def _perform_fake_ban_countdown(self, event: AstrMessageEvent, group_id: int, target_id: str):
+        # 取群内显示名
+        display_name = await self._get_group_display_name(event, group_id, int(target_id))
+
+        # 首条通告
+        head = (
+            f"目标:{target_id}\n"
+            f"名称:{display_name}\n"
+            f"原因:调戏/激怒管理员\n"
+            f"处理:对其进行永久封杀;\n"
+            f"您现在还要一分钟的时间留下遗言！！！"
+        )
+        try:
+            await event.bot.send_group_msg(group_id=int(group_id), message=head)
+        except Exception as e:
+            logger.error(f"[封杀] 首条通告发送失败: {e}")
+
+        # 倒计时节点（总计约60s）
+        steps = [
+            (10, "还剩下50秒！"),
+            (10, "剩下40秒！"),
+            (10, "30秒！"),
+            (20, "10秒！"),
+            (5,  "5秒！"),
+            (2,  "3秒!"),
+            (1,  "2秒!"),
+            (1,  "1秒!"),
+        ]
+
+        for delay, text in steps:
+            try:
+                await asyncio.sleep(delay)
+                await event.bot.send_group_msg(group_id=int(group_id), message=text)
+            except Exception as e:
+                logger.error(f"[封杀] 倒计时消息发送失败: {e}")
+
+        # 最后再等3秒，执行“处罚”
+        await asyncio.sleep(3)
+
+        # 尝试禁言60秒（吓唬用）
+        try:
+            await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=60)
+        except Exception as e:
+            logger.error(f"[封杀] 实际禁言失败（可能无管理权限）: {e}")
+
+        final_msg = f"处罚已下达！{display_name}已被永久封杀！！！ "
+        try:
+            await event.bot.send_group_msg(group_id=int(group_id), message=final_msg)
+        except Exception as e:
+            logger.error(f"[封杀] 最终通告发送失败: {e}")
+
+    # =========================================================
+    # 获取群内显示名（群名片优先，其次昵称，兜底用QQ号）
+    # =========================================================
+    async def _get_group_display_name(self, event: AstrMessageEvent, group_id: int, user_id: int) -> str:
+        try:
+            info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(user_id))
+            name = (info.get("card") or "").strip() or (info.get("nickname") or "").strip()
+            return name or str(user_id)
+        except Exception:
+            return str(user_id)
+
+    # =========================================================
     # 核心入口：群消息自动处理
     # =========================================================
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
@@ -670,6 +735,7 @@ class AutoRecallKeywordPlugin(Star):
             "全体禁言", "全体解言",
             "加白", "移白", "白名单列表",
             "黑名单列表", "针对列表", "管理员列表",
+            "封杀",  # 新增：娱乐倒计时封杀
         )
         if message_str.startswith(command_keywords):
             if not await self._is_operator(event, int(group_id), int(sender_id)):
@@ -928,7 +994,6 @@ class AutoRecallKeywordPlugin(Star):
                 logger.info(f"[踢黑兜底] 已在群 {gid} 踢出黑名单 {target_id}")
             except Exception as e:
                 logger.error(f"[踢黑兜底] 在群 {gid} 踢出 {target_id} 失败：{e}")
-
 
     # =========================================================
     # 工具：从消息里抽取目标QQ（优先 #QQ号，其次 @）
@@ -1199,6 +1264,12 @@ class AutoRecallKeywordPlugin(Star):
                     except Exception as e:
                         logger.error(f"撤回 {target_id} 消息 {msg_data.get('message_id')} 失败: {e}")
             await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 的 {deleted} 条消息")
+
+        elif msg.startswith("封杀"):
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 娱乐封杀倒计时")
+            # 异步执行，不阻塞命令处理
+            asyncio.create_task(self._perform_fake_ban_countdown(event, int(group_id), target_id))
 
     # =========================================================
     # 插件卸载钩子
