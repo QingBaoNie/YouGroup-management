@@ -569,13 +569,32 @@ class AutoRecallKeywordPlugin(Star):
                 self.user_message_ids[key].clear()
 
     # =========================================================
-    # 娱乐功能：封杀倒计时 + 最终尝试禁言60秒（不阻塞主流程）
+    # 娱乐功能：封杀倒计时（跳着撤回）+ 最终尝试禁言60秒
     # =========================================================
     async def _perform_fake_ban_countdown(self, event: AstrMessageEvent, group_id: int, target_id: str):
+        # 工具：发送并返回 message_id（失败返回 None）
+        async def _send(text: str) -> int | None:
+            try:
+                resp = await event.bot.send_group_msg(group_id=int(group_id), message=text)
+                if isinstance(resp, dict) and "message_id" in resp:
+                    return resp["message_id"]
+            except Exception as e:
+                logger.error(f"[封杀] 发送失败: {e} | 文本={text!r}")
+            return None
+
+        # 工具：安全撤回
+        async def _recall(mid: int | None):
+            if not mid:
+                return
+            try:
+                await event.bot.delete_msg(message_id=mid)
+            except Exception as e:
+                logger.error(f"[封杀] 撤回失败 mid={mid}: {e}")
+
         # 取群内显示名
         display_name = await self._get_group_display_name(event, group_id, int(target_id))
 
-        # 首条通告
+        # 头条通告（不撤回）
         head = (
             f"目标:{target_id}\n"
             f"名称:{display_name}\n"
@@ -583,44 +602,50 @@ class AutoRecallKeywordPlugin(Star):
             f"处理:对其进行永久封杀;\n"
             f"您现在还要一分钟的时间留下遗言！！！"
         )
-        try:
-            await event.bot.send_group_msg(group_id=int(group_id), message=head)
-        except Exception as e:
-            logger.error(f"[封杀] 首条通告发送失败: {e}")
+        await _send(head)
 
-        # 倒计时节点（总计约60s）
-        steps = [
-            (10, "还剩下50秒！"),
-            (10, "剩下40秒！"),
-            (10, "30秒！"),
-            (20, "10秒！"),
-            (5,  "5秒！"),
-            (2,  "3秒!"),
-            (1,  "2秒!"),
-            (1,  "1秒!"),
-        ]
+        # 按需求的节奏发送，并在指定节点撤回上一条需要撤回的消息
+        # 需要被撤回的：50、40、30、10
+        # 不撤回的：5、3、2、1、最终（以及 head）
+        m50 = m40 = m30 = m10 = None  # 将被撤回的消息ID
 
-        for delay, text in steps:
-            try:
-                await asyncio.sleep(delay)
-                await event.bot.send_group_msg(group_id=int(group_id), message=text)
-            except Exception as e:
-                logger.error(f"[封杀] 倒计时消息发送失败: {e}")
+        await asyncio.sleep(10)
+        m50 = await _send("还剩下50秒！")
+
+        await asyncio.sleep(10)
+        m40 = await _send("剩下40秒！")
+
+        await asyncio.sleep(10)
+        m30 = await _send("30秒！")
+        await _recall(m50)  # 撤回 50
+
+        await asyncio.sleep(20)
+        m10 = await _send("10秒！")
+        await _recall(m40)  # 撤回 40
+
+        await asyncio.sleep(5)
+        _ = await _send("5秒！")  # 不撤回
+        await _recall(m30)       # 撤回 30
+
+        await asyncio.sleep(2)
+        _ = await _send("3秒!")   # 不撤回
+        await _recall(m10)       # 撤回 10
+
+        await asyncio.sleep(1)
+        _ = await _send("2秒!")   # 不撤回
+
+        await asyncio.sleep(1)
+        _ = await _send("1秒!")   # 不撤回
 
         # 最后再等3秒，执行“处罚”
         await asyncio.sleep(3)
-
-        # 尝试禁言60秒（吓唬用）
         try:
             await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=60)
         except Exception as e:
             logger.error(f"[封杀] 实际禁言失败（可能无管理权限）: {e}")
 
-        final_msg = f"处罚已下达！{display_name}已被永久封杀！！！ "
-        try:
-            await event.bot.send_group_msg(group_id=int(group_id), message=final_msg)
-        except Exception as e:
-            logger.error(f"[封杀] 最终通告发送失败: {e}")
+        final_msg = f"处罚已下达！{display_name}已被永久封杀！！！ (其实就是禁言一分钟 吓唬他的 )"
+        await _send(final_msg)  # 最终消息不撤回
 
     # =========================================================
     # 获取群内显示名（群名片优先，其次昵称，兜底用QQ号）
