@@ -644,7 +644,7 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"[封杀] 实际禁言失败（可能无管理权限）: {e}")
 
-        final_msg = f"处罚已下达！{display_name}已被永久封杀！！！ (其实就是禁言一分钟 吓唬他的 )"
+        final_msg = f"处罚已下达！{display_name}已被永久封杀！！！ "
         await _send(final_msg)  # 最终消息不撤回
 
     # =========================================================
