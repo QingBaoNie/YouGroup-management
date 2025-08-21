@@ -795,7 +795,6 @@ class AutoRecallKeywordPlugin(Star):
                 "━━━━━━━━━"
             )
 
-
             try:
                 if hasattr(event, "mark_action"):
                     event.mark_action("敏感词插件 - 我的身份")
@@ -1211,114 +1210,112 @@ class AutoRecallKeywordPlugin(Star):
             return at_list[0]
 
         return None
-def _extract_cert_label(self, event: AstrMessageEvent, msg: str, target_id: str) -> str:
-    # 去掉开头关键词
-    raw = msg.strip()
-    raw = re.sub(r"^\s*(认证|移除认证)\s*", "", raw)
 
-    # 1) 结构化优先：基于 CQ 段，找到目标 @ 段后，收集其后的文本段作为标签
-    try:
-        segs = getattr(event.message_obj, 'message', []) or []
-        after = False
-        parts = []
-        for seg in segs:
-            s_type = (seg.get("type") if isinstance(seg, dict) else getattr(seg, "type", "")).lower()
-            if s_type == "at":
-                qq = None
-                if isinstance(seg, dict):
-                    qq = seg.get("data", {}).get("qq") or seg.get("qq")
-                else:
-                    data = getattr(seg, "data", None)
-                    qq = (getattr(data, "qq", None) if data else None) or getattr(seg, "qq", None)
-                if str(qq) == str(target_id):
-                    after = True
-                continue  # 跳过 @ 段本身
+    # =========================================================
+    # 新增：提取“认证标签”
+    # =========================================================
+    def _extract_cert_label(self, event: AstrMessageEvent, msg: str, target_id: str) -> str:
+        # 去掉开头关键词
+        raw = msg.strip()
+        raw = re.sub(r"^\s*(认证|移除认证)\s*", "", raw)
 
-            if s_type in ("text", "text_plain", "plain"):
-                if isinstance(seg, dict):
-                    t = seg.get("data", {}).get("text", "") or ""
-                else:
-                    data = getattr(seg, "data", None)
-                    t = (getattr(data, "text", None) if data else None) or getattr(seg, "text", "") or ""
-
-                if not after:
-                    # 处理 '#QQ' 在同一 text 段里的情况
-                    m = re.search(r"#\s*" + re.escape(str(target_id)), t)
-                    if m:
-                        parts.append(t[m.end():])
+        # 1) 结构化优先：基于 CQ 段，找到目标 @ 段后，收集其后的文本段作为标签
+        try:
+            segs = getattr(event.message_obj, 'message', []) or []
+            after = False
+            parts = []
+            for seg in segs:
+                s_type = (seg.get("type") if isinstance(seg, dict) else getattr(seg, "type", "")).lower()
+                if s_type == "at":
+                    qq = None
+                    if isinstance(seg, dict):
+                        qq = seg.get("data", {}).get("qq") or seg.get("qq")
+                    else:
+                        data = getattr(seg, "data", None)
+                        qq = (getattr(data, "qq", None) if data else None) or getattr(seg, "qq", None)
+                    if str(qq) == str(target_id):
                         after = True
-                else:
-                    parts.append(t)
+                    continue  # 跳过 @ 段本身
 
-        if after:
-            label = "".join(parts)
-        else:
-            label = raw  # 没识别到 @ 段，退回原始清洗
-    except Exception:
-        label = raw
+                if s_type in ("text", "text_plain", "plain"):
+                    if isinstance(seg, dict):
+                        t = seg.get("data", {}).get("text", "") or ""
+                    else:
+                        data = getattr(seg, "data", None)
+                        t = (getattr(data, "text", None) if data else None) or getattr(seg, "text", "") or ""
 
-    # 2) 兜底清洗：移除一次 @昵称 / [CQ:at,...] / #QQ
-    label = re.sub(r"\[CQ:at,[^\]]+\]", "", label, count=1)
-    label = re.sub(r"@[^\s\(\)]+(?:\([^\)]*\))?", "", label, count=1)  # @忧 或 @忧(123456)
-    label = re.sub(r"#\s*\d{5,12}", "", label, count=1)
+                    if not after:
+                        # 处理 '#QQ' 在同一 text 段里的情况
+                        m = re.search(r"#\s*" + re.escape(str(target_id)), t)
+                        if m:
+                            parts.append(t[m.end():])
+                            after = True
+                    else:
+                        parts.append(t)
 
-    # 3) 统一空白并裁剪
-    label = re.sub(r"\s+", " ", label).strip()
-    return label
+            if after:
+                label = "".join(parts)
+            else:
+                label = raw  # 没识别到 @ 段，退回原始清洗
+        except Exception:
+            label = raw
 
+        # 2) 兜底清洗：移除一次 @昵称 / [CQ:at,...] / #QQ
+        label = re.sub(r"\[CQ:at,[^\]]+\]", "", label, count=1)
+        label = re.sub(r"@[^\s\(\)]+(?:\([^\)]*\))?", "", label, count=1)  # 支持 @忧 或 @忧(123456)
+        label = re.sub(r"#\s*\d{5,12}", "", label, count=1)
 
-# =========================================================
-# 新增：主人专用的权威认证命令
-# 语法：
-#   认证 @XX 标签词      或  认证 #QQ 标签词
-#   移除认证 @XX         或  移除认证 #QQ
-# 标签默认限制：1~12字符（可含中文/字母/数字/符号）
-# =========================================================
-async def handle_certify(self, event: AstrMessageEvent):
-    msg = event.message_str.strip()
-    group_id = event.get_group_id()
-    sender_id = event.get_sender_id()
+        # 3) 统一空白并裁剪
+        label = re.sub(r"\s+", " ", label).strip()
+        return label
 
-    # 仅主人可用
-    if not (self.owner_qq and str(sender_id) == self.owner_qq):
-        await event.bot.send_group_msg(group_id=int(group_id), message="只有主人才能进行权威认证。")
-        return
+    # =========================================================
+    # 新增：主人专用的权威认证命令
+    # =========================================================
+    async def handle_certify(self, event: AstrMessageEvent):
+        msg = event.message_str.strip()
+        group_id = event.get_group_id()
+        sender_id = event.get_sender_id()
 
-    # 提取目标
-    target_id = self._extract_target_from_msg(event, msg)
-    if not target_id:
-        await event.bot.send_group_msg(group_id=int(group_id), message="请使用 @或 #QQ号 指定认证对象。")
-        return
+        # 仅主人可用
+        if not (self.owner_qq and str(sender_id) == self.owner_qq):
+            await event.bot.send_group_msg(group_id=int(group_id), message="只有主人才能进行权威认证。")
+            return
 
-    # 是否为移除
-    if msg.startswith("移除认证"):
-        if str(target_id) in self.authority_cert:
-            del self.authority_cert[str(target_id)]
-            self.save_auth_data()
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"已移除 {target_id} 的认证。")
-        else:
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 没有认证，无需移除。")
-        return
+        # 提取目标
+        target_id = self._extract_target_from_msg(event, msg)
+        if not target_id:
+            await event.bot.send_group_msg(group_id=int(group_id), message="请使用 @或 #QQ号 指定认证对象。")
+            return
 
-    # 设置认证：抽取标签
-    label = self._extract_cert_label(event, msg, target_id)
-    if not label:
-        await event.bot.send_group_msg(group_id=int(group_id), message="请在目标后面写上认证标签，例如：认证 @他 王牌狙击手")
-        return
+        # 移除认证
+        if msg.startswith("移除认证"):
+            if str(target_id) in self.authority_cert:
+                del self.authority_cert[str(target_id)]
+                self.save_auth_data()
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"已移除 {target_id} 的认证。")
+            else:
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 没有认证，无需移除。")
+            return
 
-    # 限长 12
-    if len(label) > 12:
-        label = label[:12]
+        # 解析标签并保存
+        label = self._extract_cert_label(event, msg, target_id)
+        if not label:
+            await event.bot.send_group_msg(group_id=int(group_id), message="请在目标后面写上认证标签，例如：认证 @他 王牌狙击手")
+            return
 
-    self.authority_cert[str(target_id)] = label
-    self.save_auth_data()
-    try:
-        if hasattr(event, "mark_action"):
-            event.mark_action("敏感词插件 - 权威认证")
-    except Exception:
-        pass
-    await event.bot.send_group_msg(group_id=int(group_id), message=f"已将 {target_id} 认证为『{label}』")
+        # 限长 12（可自行调整）
+        if len(label) > 12:
+            label = label[:12]
 
+        self.authority_cert[str(target_id)] = label
+        self.save_auth_data()
+        try:
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 权威认证")
+        except Exception:
+            pass
+        await event.bot.send_group_msg(group_id=int(group_id), message=f"已将 {target_id} 认证为『{label}』")
 
     # =========================================================
     # 群管命令处理（支持 @ 与 #QQ号；禁言/撤回后缀数字）
@@ -1379,7 +1376,6 @@ async def handle_certify(self, event: AstrMessageEvent):
             )
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
-
 
         if msg.startswith("针对列表"):
             if hasattr(event, "mark_action"):
