@@ -1318,10 +1318,13 @@ class AutoRecallKeywordPlugin(Star):
                 event.mark_action("敏感词插件 - 黑名单列表")
             items = sorted(self.kick_black_list, key=lambda x: int(x))
             count = len(items)
-            text = "以下为 黑名单QQ 总计{}\n{}".format(count, ("\n.join(items) if items else '（空）') )
-            text = "以下为 黑名单QQ 总计{}\n{}".format(count, ("\n".join(items) if items else "（空）"))
+            text = "以下为 黑名单QQ 总计{}\n{}".format(
+                count,
+                ("\n".join(items) if items else "（空）")
+            )
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
+
 
         if msg.startswith("针对列表"):
             if hasattr(event, "mark_action"):
