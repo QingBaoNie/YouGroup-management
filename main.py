@@ -22,7 +22,7 @@ except Exception:  # 兜底：如果环境没装 aiohttp，这里给出占位提
 @register(
     "YouGroup-management",
     "You",
-    "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群+查询违规+看美女+我的身份/权威认证)",
+    "敏感词自动撤回插件：集关键词过滤、刷屏检测、群管指令、查共群、违规查询、看美女、身份认证于一体的多功能群管助手。",
     "1.3.0",
     "https://github.com/QingBaoNie/YouGroup-management"
 )
