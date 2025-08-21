@@ -780,13 +780,18 @@ class AutoRecallKeywordPlugin(Star):
             auth = self.authority_cert.get(str(sender_id), "无名小辈")
             # 时间
             ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+            # 美化输出（对齐 + Emoji 风格）
             text = (
-                f"名称:{name}\n"
-                f"QQ:{sender_id}\n"
-                f"身份:{role_cn}\n"
-                f"权威认证:{auth}\n"
-                f"查询时间:{ts}"
+                "━━━━━━━━━━━━━━━\n"
+                f"👤 名称       : {name}\n"
+                f"🆔 QQ         : {sender_id}\n"
+                f"🎭 身份       : {role_cn}\n"
+                f"🏅 权威认证   : {auth}\n"
+                f"⏰ 查询时间   : {ts}\n"
+                "━━━━━━━━━━━━━━━"
             )
+
             try:
                 if hasattr(event, "mark_action"):
                     event.mark_action("敏感词插件 - 我的身份")
@@ -794,6 +799,7 @@ class AutoRecallKeywordPlugin(Star):
                 pass
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
+
 
         # ---------- 我要看美女 ----------
         if "我要看美女" in message_str:
