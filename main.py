@@ -781,7 +781,7 @@ class AutoRecallKeywordPlugin(Star):
             # 时间
             ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
-            # 美化输出（对齐 + Emoji 风格）
+            # 美化输出（卡片风格）
             text = (
                 "╭━━━━『👑 我的身份』━━━━╮\n"
                 f"👤 名称       │ {name}\n"
@@ -794,15 +794,14 @@ class AutoRecallKeywordPlugin(Star):
                 "╰━━━━━━━━━━━━━━━━━━╯"
             )
 
-
             try:
                 if hasattr(event, "mark_action"):
                     event.mark_action("敏感词插件 - 我的身份")
             except Exception:
                 pass
+
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
-
 
         # ---------- 我要看美女 ----------
         if "我要看美女" in message_str:
