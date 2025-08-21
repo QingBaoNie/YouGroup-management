@@ -23,7 +23,7 @@ except Exception:  # 兜底：如果环境没装 aiohttp，这里给出占位提
     "YouGroup-management",
     "You",
     "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群+查询违规+看美女)",
-    "1.2.7",
+    "1.2.8",
     "https://github.com/QingBaoNie/YouGroup-management"
 )
 class AutoRecallKeywordPlugin(Star):
@@ -62,6 +62,9 @@ class AutoRecallKeywordPlugin(Star):
         # 入群事件短期去重：记录 (group_id, user_id)
         self._join_seen = set()
 
+        # 踢/踢黑后撤回数量（可在配置覆盖）
+        self.recall_on_kick_count = 10
+
     # =========================================================
     # 初始化配置（从外部 config 注入、解析开关、打印日志）
     # =========================================================
@@ -84,6 +87,12 @@ class AutoRecallKeywordPlugin(Star):
 
         # 主人QQ从配置读取
         self.owner_qq = str(admin_config.get("owner_qq", "")).strip()
+
+        # 新增：踢出/踢黑时撤回最近 N 条（默认 10）
+        try:
+            self.recall_on_kick_count = int(admin_config.get("recall_on_kick_count", 10))
+        except Exception:
+            self.recall_on_kick_count = 10
 
         # --- 自动回复规则（支持 {face:ID} 变量，发送时转换）---
         auto_replies_config = config_data.get("auto_replies", [])
@@ -132,6 +141,7 @@ class AutoRecallKeywordPlugin(Star):
         logger.info(f"撤回配置: links={self.recall_links}, cards={self.recall_cards}, numbers={self.recall_numbers}, forward={self.recall_forward}")
         logger.info(f"超长文本撤回: enable={self.recall_long_text}, max_text_length={self.max_text_length}")
         logger.info(f"入群邀请: auto_accept_owner_invite={self.auto_accept_owner_invite}, reject_non_owner_invite={self.reject_non_owner_invite}")
+        logger.info(f"踢/踢黑后撤回最近条数: {self.recall_on_kick_count}")
 
     # =========================================================
     # 工具函数：将内存数据保存到本地（名单类）
@@ -413,6 +423,18 @@ class AutoRecallKeywordPlugin(Star):
                 await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {uid}，已自动踢出。")
             except Exception:
                 pass
+
+            # 踢出成功：仅对当前群撤回其最近 N 条
+            try:
+                removed = await self._recall_recent_messages_of_user(event, int(group_id), uid, self.recall_on_kick_count)
+                if removed > 0:
+                    try:
+                        await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {uid} 最近 {removed} 条消息")
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.error(f"[入群踢黑撤回] 异常: {e}")
+
             return True
         except Exception as e:
             logger.error(f"[入群踢黑] 踢出黑名单 {uid} 失败：{e}")
@@ -604,40 +626,18 @@ class AutoRecallKeywordPlugin(Star):
         )
         await _send(head)
 
-        # 按需求的节奏发送，并在指定节点撤回上一条需要撤回的消息
         # 需要被撤回的：50、40、30、10
-        # 不撤回的：5、3、2、1、最终（以及 head）
-        m50 = m40 = m30 = m10 = None  # 将被撤回的消息ID
+        m50 = m40 = m30 = m10 = None
 
-        await asyncio.sleep(10)
-        m50 = await _send("还剩下50秒！")
+        await asyncio.sleep(10); m50 = await _send("还剩下50秒！")
+        await asyncio.sleep(10); m40 = await _send("剩下40秒！")
+        await asyncio.sleep(10); m30 = await _send("30秒！"); await _recall(m50)
+        await asyncio.sleep(20); m10 = await _send("10秒！"); await _recall(m40)
+        await asyncio.sleep(5);  _ =  await _send("5秒！");   await _recall(m30)
+        await asyncio.sleep(2);  _ =  await _send("3秒!")
+        await asyncio.sleep(1);  _ =  await _send("2秒!")
+        await asyncio.sleep(1);  _ =  await _send("1秒!")
 
-        await asyncio.sleep(10)
-        m40 = await _send("剩下40秒！")
-
-        await asyncio.sleep(10)
-        m30 = await _send("30秒！")
-        await _recall(m50)  # 撤回 50
-
-        await asyncio.sleep(20)
-        m10 = await _send("10秒！")
-        await _recall(m40)  # 撤回 40
-
-        await asyncio.sleep(5)
-        _ = await _send("5秒！")  # 不撤回
-        await _recall(m30)       # 撤回 30
-
-        await asyncio.sleep(2)
-        _ = await _send("3秒!")   # 不撤回
-        await _recall(m10)       # 撤回 10
-
-        await asyncio.sleep(1)
-        _ = await _send("2秒!")   # 不撤回
-
-        await asyncio.sleep(1)
-        _ = await _send("1秒!")   # 不撤回
-
-        # 最后再等3秒，执行“处罚”
         await asyncio.sleep(3)
         try:
             await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=60)
@@ -645,7 +645,7 @@ class AutoRecallKeywordPlugin(Star):
             logger.error(f"[封杀] 实际禁言失败（可能无管理权限）: {e}")
 
         final_msg = f"处罚已下达！{display_name}已被永久封杀！！！ "
-        await _send(final_msg)  # 最终消息不撤回
+        await _send(final_msg)
 
     # =========================================================
     # 获取群内显示名（群名片优先，其次昵称，兜底用QQ号）
@@ -760,7 +760,7 @@ class AutoRecallKeywordPlugin(Star):
             "全体禁言", "全体解言",
             "加白", "移白", "白名单列表",
             "黑名单列表", "针对列表", "管理员列表",
-            "封杀",  # 新增：娱乐倒计时封杀
+            "封杀",
         )
         if message_str.startswith(command_keywords):
             if not await self._is_operator(event, int(group_id), int(sender_id)):
@@ -782,7 +782,7 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
 
-        # ---------- 黑名单：发言触发兜底 ----------
+        # ---------- 黑名单：发言触发兜底（只在当前群处理+撤回） ----------
         if str(sender_id) in self.kick_black_list:
             if await self._bot_is_admin(event, int(group_id)):
                 try:
@@ -791,6 +791,18 @@ class AutoRecallKeywordPlugin(Star):
                     except TypeError:
                         await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
                     await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
+
+                    # 新增：仅在当前群撤回其最近 N 条
+                    try:
+                        removed = await self._recall_recent_messages_of_user(event, int(group_id), str(sender_id), self.recall_on_kick_count)
+                        if removed > 0:
+                            try:
+                                await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {sender_id} 最近 {removed} 条消息")
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        logger.error(f"[黑名单兜底撤回] 异常: {e}")
+
                 except Exception as e:
                     logger.error(f"[黑名单兜底] 踢出失败 gid={group_id} uid={sender_id}: {e}")
             else:
@@ -894,6 +906,38 @@ class AutoRecallKeywordPlugin(Star):
                 logger.error(f"撤回失败且查询用户角色失败: {e} / 查询错误: {ex}")
 
     # =========================================================
+    # 工具：仅在指定群撤回某个用户最近 N 条消息（从新到旧）
+    # =========================================================
+    async def _recall_recent_messages_of_user(self, event: AstrMessageEvent, group_id: int, target_id: str, limit: int | None = None) -> int:
+        limit = limit or self.recall_on_kick_count
+        removed = 0
+        try:
+            history = await event.bot.get_group_msg_history(group_id=int(group_id), count=200)
+            msgs = history.get('messages', []) or []
+        except Exception as e:
+            logger.error(f"[撤回最近N条] 获取历史失败 gid={group_id}: {e}")
+            return 0
+
+        # 假定返回为新->旧；若你的适配器是旧->新，可改为 reversed(msgs)
+        for msg_data in msgs:
+            if removed >= limit:
+                break
+            try:
+                if str(msg_data.get('sender', {}).get('user_id')) != str(target_id):
+                    continue
+                mid = msg_data.get('message_id')
+                if mid is None:
+                    continue
+                try:
+                    await event.bot.delete_msg(message_id=mid)
+                    removed += 1
+                except Exception as e:
+                    logger.error(f"[撤回最近N条] 撤回失败 mid={mid}: {e}")
+            except Exception as e:
+                logger.error(f"[撤回最近N条] 扫描失败: {e}")
+        return removed
+
+    # =========================================================
     # 功能指令：查共群
     # =========================================================
     async def handle_check_common_groups(self, event: AstrMessageEvent):
@@ -959,15 +1003,12 @@ class AutoRecallKeywordPlugin(Star):
             )
             if isinstance(resp, dict) and "message_id" in resp:
                 asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=60))
+
     # =========================================================
     # 兜底：在所有管理中的群里踢出黑名单目标（静默，只记日志）
-    # 规则：
-    # - 机器人是群管 且 目标在群里 且 目标不是群管 => 踢
-    # - 目标是群管 => 不处理（静默日志）
-    # - 机器人不是群管 => 不处理（静默日志）
+    # 只踢，不撤回（避免影响非触发群）
     # =========================================================
     async def _kick_blacklist_in_all_admin_groups(self, event: AstrMessageEvent, target_id: str):
-        # 拉取群列表（兼容多种返回结构）
         try:
             raw = await event.bot.get_group_list()
             if isinstance(raw, list):
@@ -978,7 +1019,6 @@ class AutoRecallKeywordPlugin(Star):
             logger.error(f"[踢黑兜底] 获取群列表失败：{e}")
             return
 
-        # 逐群检查
         for g in groups:
             try:
                 gid = int(g.get("group_id") or g.get("gid") or g.get("group") or 0)
@@ -987,15 +1027,12 @@ class AutoRecallKeywordPlugin(Star):
             if not gid:
                 continue
 
-            # 先看目标是否在该群（不在会异常/空返回，直接跳过）
             try:
                 member_info = await event.bot.get_group_member_info(group_id=gid, user_id=int(target_id))
                 target_role = str(member_info.get("role", "member"))
             except Exception:
-                # 目标不在该群或无权限获取
                 continue
 
-            # 看机器人权限
             try:
                 bot_is_admin = await self._bot_is_admin(event, gid)
             except Exception:
@@ -1005,12 +1042,10 @@ class AutoRecallKeywordPlugin(Star):
                 logger.info(f"[踢黑兜底] 发现黑名单 {target_id} 在群 {gid}，但机器人非管理，忽略。")
                 continue
 
-            # 目标是管理员/群主则不处理
             if target_role in ("owner", "admin"):
                 logger.info(f"[踢黑兜底] 发现黑名单 {target_id} 在群 {gid} 且其为 {target_role}，按规则忽略。")
                 continue
 
-            # 动手踢（静默，不群发提示）
             try:
                 try:
                     await event.bot.set_group_kick(group_id=gid, user_id=int(target_id), reject_add_request=True)
@@ -1024,12 +1059,10 @@ class AutoRecallKeywordPlugin(Star):
     # 工具：从消息里抽取目标QQ（优先 #QQ号，其次 @）
     # =========================================================
     def _extract_target_from_msg(self, event: AstrMessageEvent, msg: str) -> str | None:
-        # 1) 先找 #QQ号
         m = re.search(r"#\s*(\d{5,12})", msg)
         if m:
             return m.group(1)
 
-        # 2) 再从消息段里找 @
         at_list = []
         for segment in getattr(event.message_obj, 'message', []):
             seg_type = getattr(segment, 'type', '')
@@ -1182,6 +1215,7 @@ class AutoRecallKeywordPlugin(Star):
 
                 bot_is_admin = await self._bot_is_admin(event, int(group_id))
 
+                kicked_here = False
                 if not bot_is_admin:
                     logger.info(f"[踢黑命令] 机器人在群 {group_id} 非管理，无法踢当前群目标 {target_id}。")
                 elif t_role in ("owner", "admin"):
@@ -1191,9 +1225,21 @@ class AutoRecallKeywordPlugin(Star):
                         await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id), reject_add_request=True)
                     except TypeError:
                         await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
+                    kicked_here = True
                     await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入踢黑名单并踢出")
 
-                # 兜底：异步巡检所有管理群（静默，仅日志）
+                # 仅在当前群撤回其最近 N 条（不管是否成功踢出，只要触发了踢黑）
+                try:
+                    removed = await self._recall_recent_messages_of_user(event, int(group_id), target_id, self.recall_on_kick_count)
+                    if removed > 0:
+                        try:
+                            await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 最近 {removed} 条消息")
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.error(f"[踢黑后撤回] 异常: {e}")
+
+                # 兜底：其他群只静默踢，不撤回
                 asyncio.create_task(self._kick_blacklist_in_all_admin_groups(event, target_id))
 
             except Exception as e:
@@ -1214,6 +1260,17 @@ class AutoRecallKeywordPlugin(Star):
                 await event.bot.send_group_msg(group_id=int(group_id), message=f"已踢出 {target_id}")
             except Exception as e:
                 logger.error(f"踢出失败 gid={group_id} uid={target_id}: {e}")
+            else:
+                # 踢出成功后，仅在当前群撤回其最近 N 条
+                try:
+                    removed = await self._recall_recent_messages_of_user(event, int(group_id), target_id, self.recall_on_kick_count)
+                    if removed > 0:
+                        try:
+                            await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 最近 {removed} 条消息")
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.error(f"[踢出后撤回] 异常: {e}")
 
         elif msg.startswith("针对"):
             if hasattr(event, "mark_action"):
