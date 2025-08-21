@@ -15,15 +15,15 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import Aioc
 try:
     import aiohttp
 except Exception:  # 兜底：如果环境没装 aiohttp，这里给出占位提示
-    aiohttp = None
-    logger.error("未检测到 aiohttp，‘我要看美女’接口将无法调用，请安装 aiohttp。")
+        aiohttp = None
+        logger.error("未检测到 aiohttp，‘我要看美女’接口将无法调用，请安装 aiohttp。")
 
 
 @register(
     "YouGroup-management",
     "You",
-    "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群+查询违规+看美女)",
-    "1.2.8",
+    "敏感词自动撤回插件(关键词匹配+刷屏检测+群管指令+查共群+查询违规+看美女+我的身份/权威认证)",
+    "1.2.9",
     "https://github.com/QingBaoNie/YouGroup-management"
 )
 class AutoRecallKeywordPlugin(Star):
@@ -65,10 +65,16 @@ class AutoRecallKeywordPlugin(Star):
         # 踢/踢黑后撤回数量（可在配置覆盖）
         self.recall_on_kick_count = 10
 
+        # —— 新增：权威认证映射（uid -> 标签），默认无条目即“无名小辈”
+        self.authority_cert = {}  # { "123456": "无敌", ... }
+
     # =========================================================
     # 初始化配置（从外部 config 注入、解析开关、打印日志）
     # =========================================================
     async def initialize(self):
+        # 先尝试加载本地持久化数据（若存在）
+        self._load_json_data()
+
         config_data = self.config
         self.bad_words = config_data.get("bad_words", [])
 
@@ -80,19 +86,20 @@ class AutoRecallKeywordPlugin(Star):
 
         # --- 群管配置 ---
         admin_config = config_data.get("admin_config", {})
-        self.sub_admin_list = set(admin_config.get("sub_admin_list", []))
-        self.kick_black_list = set(admin_config.get("kick_black_list", []))
-        self.target_user_list = set(admin_config.get("target_user_list", []))
-        self.whitelist = set(admin_config.get("whitelist", []))
+        # 合并配置与持久化（配置优先生效）
+        self.sub_admin_list |= set(admin_config.get("sub_admin_list", []))
+        self.kick_black_list |= set(admin_config.get("kick_black_list", []))
+        self.target_user_list |= set(admin_config.get("target_user_list", []))
+        self.whitelist |= set(admin_config.get("whitelist", []))
 
         # 主人QQ从配置读取
-        self.owner_qq = str(admin_config.get("owner_qq", "")).strip()
+        self.owner_qq = str(admin_config.get("owner_qq", "")).strip() or self.owner_qq
 
         # 新增：踢出/踢黑时撤回最近 N 条（默认 10）
         try:
-            self.recall_on_kick_count = int(admin_config.get("recall_on_kick_count", 10))
+            self.recall_on_kick_count = int(admin_config.get("recall_on_kick_count", self.recall_on_kick_count))
         except Exception:
-            self.recall_on_kick_count = 10
+            pass
 
         # --- 自动回复规则（支持 {face:ID} 变量，发送时转换）---
         auto_replies_config = config_data.get("auto_replies", [])
@@ -142,9 +149,28 @@ class AutoRecallKeywordPlugin(Star):
         logger.info(f"超长文本撤回: enable={self.recall_long_text}, max_text_length={self.max_text_length}")
         logger.info(f"入群邀请: auto_accept_owner_invite={self.auto_accept_owner_invite}, reject_non_owner_invite={self.reject_non_owner_invite}")
         logger.info(f"踢/踢黑后撤回最近条数: {self.recall_on_kick_count}")
+        logger.info(f"权威认证条目: {len(self.authority_cert)}")
 
     # =========================================================
-    # 工具函数：将内存数据保存到本地（名单类）
+    # 工具函数：从本地 JSON 恢复（若存在）
+    # =========================================================
+    def _load_json_data(self):
+        try:
+            with open('cesn_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            self.kick_black_list = set(data.get('kick_black_list', []))
+            self.target_user_list = set(data.get('target_user_list', []))
+            self.sub_admin_list = set(data.get('sub_admin_list', []))
+            self.whitelist = set(data.get('whitelist', []))
+            self.authority_cert = dict(data.get('authority_cert', {}))
+            logger.info("已从 cesn_data.json 加载数据")
+        except FileNotFoundError:
+            logger.info("首次运行：未发现 cesn_data.json，将在后续保存时创建。")
+        except Exception as e:
+            logger.error(f"读取 cesn_data.json 失败：{e}")
+
+    # =========================================================
+    # 工具函数：将内存数据保存到本地（名单类 + 权威认证）
     # =========================================================
     def save_json_data(self):
         data = {
@@ -152,6 +178,7 @@ class AutoRecallKeywordPlugin(Star):
             'target_user_list': list(self.target_user_list),
             'sub_admin_list': list(self.sub_admin_list),
             'whitelist': list(self.whitelist),
+            'authority_cert': self.authority_cert,  # 映射保留为 dict
         }
         with open('cesn_data.json', 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -659,6 +686,17 @@ class AutoRecallKeywordPlugin(Star):
             return str(user_id)
 
     # =========================================================
+    # 工具：角色中文名
+    # =========================================================
+    def _role_label(self, role: str) -> str:
+        role = (role or "").lower()
+        if role == "owner":
+            return "高贵的群主"
+        if role == "admin":
+            return "尊贵的管理"
+        return "低贱的群员"
+
+    # =========================================================
     # 核心入口：群消息自动处理
     # =========================================================
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
@@ -674,6 +712,32 @@ class AutoRecallKeywordPlugin(Star):
         # ---------- 主人主动退群命令 ----------
         handled = await self.handle_owner_leave_group(event, message_str)
         if handled:
+            return
+
+        # ---------- 新增：我的身份（人人可查） ----------
+        if message_str == "我的身份":
+            # 群内名称
+            name = await self._get_group_display_name(event, int(group_id), int(sender_id))
+            # 角色身份
+            role = await self._get_member_role(event, int(group_id), int(sender_id))
+            role_cn = self._role_label(role)
+            # 权威认证
+            auth = self.authority_cert.get(str(sender_id), "无名小辈")
+            # 时间
+            ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            text = (
+                f"名称:{name}\n"
+                f"QQ:{sender_id}\n"
+                f"身份:{role_cn}\n"
+                f"权威认证:{auth}\n"
+                f"查询时间:{ts}"
+            )
+            try:
+                if hasattr(event, "mark_action"):
+                    event.mark_action("敏感词插件 - 我的身份")
+            except Exception:
+                pass
+            await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
 
         # ---------- 我要看美女 ----------
@@ -761,8 +825,14 @@ class AutoRecallKeywordPlugin(Star):
             "加白", "移白", "白名单列表",
             "黑名单列表", "针对列表", "管理员列表",
             "封杀",
+            "认证",  # 新增：权威认证（仅主人）
         )
         if message_str.startswith(command_keywords):
+            # 特判：认证命令放到 _is_operator 检查之前，因为它需要更严格（仅主人）
+            if message_str.startswith("认证"):
+                await self.handle_certify(event)
+                return
+
             if not await self._is_operator(event, int(group_id), int(sender_id)):
                 try:
                     resp = await event.bot.send_group_msg(group_id=int(group_id), message="你配指挥我吗？")
@@ -1076,6 +1146,39 @@ class AutoRecallKeywordPlugin(Star):
             return at_list[0]
 
         return None
+
+    # =========================================================
+    # 新增：主人专用的权威认证命令
+    # 语法：认证@XX 无敌   或  认证 #QQ 无敌
+    # =========================================================
+    async def handle_certify(self, event: AstrMessageEvent):
+        msg = event.message_str.strip()
+        group_id = event.get_group_id()
+        sender_id = event.get_sender_id()
+
+        # 仅主人可用
+        if not (self.owner_qq and str(sender_id) == self.owner_qq):
+            await event.bot.send_group_msg(group_id=int(group_id), message="只有主人才能进行权威认证。")
+            return
+
+        target_id = self._extract_target_from_msg(event, msg)
+        if not target_id:
+            await event.bot.send_group_msg(group_id=int(group_id), message="请使用 @或 #QQ号 指定认证对象。")
+            return
+
+        # 仅当包含 “无敌” 时标记为无敌，其它词忽略（可按需扩展）
+        if "无敌" not in msg:
+            await event.bot.send_group_msg(group_id=int(group_id), message="目前仅支持标记为『无敌』。")
+            return
+
+        self.authority_cert[str(target_id)] = "无敌"
+        self.save_json_data()
+        try:
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 权威认证")
+        except Exception:
+            pass
+        await event.bot.send_group_msg(group_id=int(group_id), message="标记成功！")
 
     # =========================================================
     # 群管命令处理（支持 @ 与 #QQ号；禁言/撤回后缀数字）
