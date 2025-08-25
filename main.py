@@ -739,6 +739,40 @@ class AutoRecallKeywordPlugin(Star):
             return name or str(user_id)
         except Exception:
             return str(user_id)
+    # 获取全局昵称（不在群内时用）
+    async def _get_global_nickname(self, event: AstrMessageEvent, user_id: int | str) -> str:
+        try:
+            info = await event.bot.get_stranger_info(user_id=int(user_id))
+            return (info.get("nickname") or info.get("name") or "").strip() or str(user_id)
+        except Exception:
+            return str(user_id)
+
+    # 优先群内显示名，失败就退回全局昵称
+    async def _resolve_display_name_anywhere(self, event: AstrMessageEvent, group_id: int, user_id: int | str) -> str:
+        try:
+            info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(user_id))
+            name = (info.get("card") or "").strip() or (info.get("nickname") or "").strip()
+            if name:
+                return name
+        except Exception:
+            pass
+        return await self._get_global_nickname(event, user_id)
+
+    # 格式化列表 ["123","456"] → ["123(忧)","456(某某)"]
+    async def _format_id_list_with_names(self, event: AstrMessageEvent, group_id: int, ids: list[str]) -> list[str]:
+        try:
+            ordered = sorted(ids, key=lambda x: int(x))
+        except Exception:
+            ordered = sorted(ids)
+
+        coros = [self._resolve_display_name_anywhere(event, int(group_id), i) for i in ordered]
+        names = await asyncio.gather(*coros, return_exceptions=True)
+
+        lines = []
+        for uid, nm in zip(ordered, names):
+            name = nm if isinstance(nm, str) and nm else str(uid)
+            lines.append(f"{uid}({name})")
+        return lines
 
     # =========================================================
     # 工具：角色中文名
@@ -1359,44 +1393,39 @@ class AutoRecallKeywordPlugin(Star):
         if msg.startswith("白名单列表"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 白名单列表")
-            items = sorted(self.whitelist, key=lambda x: int(x))
-            count = len(items)
-            text = "以下为 白名单QQ 总计{}\n{}".format(count, ("\n".join(items) if items else "（空）"))
+            items = list(self.whitelist)
+            lines = await self._format_id_list_with_names(event, int(group_id), items)
+            text = "以下为 白名单QQ 总计{}\n{}".format(len(items), ("\n".join(lines) if lines else "（空）"))
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
 
         if msg.startswith("黑名单列表"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 黑名单列表")
-            items = sorted(self.kick_black_list, key=lambda x: int(x))
-            count = len(items)
-            text = "以下为 黑名单QQ 总计{}\n{}".format(
-                count,
-                ("\n".join(items) if items else "（空）")
-            )
+            items = list(self.kick_black_list)
+            lines = await self._format_id_list_with_names(event, int(group_id), items)
+            text = "以下为 黑名单QQ 总计{}\n{}".format(len(items), ("\n".join(lines) if lines else "（空）"))
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
 
         if msg.startswith("针对列表"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 针对列表")
-            items = sorted(self.target_user_list, key=lambda x: int(x))
-            count = len(items)
-            text = "以下为 针对名单QQ 总计{}\n{}".format(count, ("\n".join(items) if items else "（空）"))
+            items = list(self.target_user_list)
+            lines = await self._format_id_list_with_names(event, int(group_id), items)
+            text = "以下为 针对名单QQ 总计{}\n{}".format(len(items), ("\n".join(lines) if lines else "（空）"))
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
 
         if msg.startswith("管理员列表"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 管理员列表")
-            try:
-                items = sorted(self.sub_admin_list, key=lambda x: int(x))
-            except Exception:
-                items = sorted(self.sub_admin_list)
-            count = len(items)
-            text = "以下为 子管理员QQ 总计{}\n{}".format(count, ("\n".join(items) if items else "（空）"))
+            items = list(self.sub_admin_list)
+            lines = await self._format_id_list_with_names(event, int(group_id), items)
+            text = "以下为 子管理员QQ 总计{}\n{}".format(len(items), ("\n".join(lines) if lines else "（空）"))
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
+
 
         # 需要目标QQ的命令：支持 @ 与 #QQ号
         target_id = self._extract_target_from_msg(event, msg)
