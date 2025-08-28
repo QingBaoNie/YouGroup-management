@@ -1501,7 +1501,7 @@ class AutoRecallKeywordPlugin(Star):
                     return
 
                 if target_id in self.kick_black_list:
-                    await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已在黑名单，无需重复添加。")
+                    await event.bot.send_group_msg(group_id=int(group_id), message=f"『{target_id}』 已在黑名单，无需重复添加。")
                 else:
                     # 先加入黑名单并持久化
                     self.kick_black_list.add(target_id)
@@ -1525,14 +1525,14 @@ class AutoRecallKeywordPlugin(Star):
                         await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id), reject_add_request=True)
                     except TypeError:
                         await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
-                    await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入踢黑名单并踢出")
+                    await event.bot.send_group_msg(group_id=int(group_id), message=f"『{target_id}』 已加入踢黑名单并踢出")
 
                 # 仅在当前群撤回其最近 N 条（不管是否成功踢出，只要触发了踢黑）
                 try:
                     removed = await self._recall_recent_messages_of_user(event, int(group_id), target_id, self.recall_on_kick_count)
                     if removed > 0:
                         try:
-                            await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 最近 {removed} 条消息")
+                            await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 『{target_id}』 最近 {removed} 条消息")
                         except Exception:
                             pass
                 except Exception as e:
@@ -1549,14 +1549,14 @@ class AutoRecallKeywordPlugin(Star):
                 event.mark_action("敏感词插件 - 解黑")
             self.kick_black_list.discard(target_id)
             self.save_json_data()
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移出踢黑名单")
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"『{target_id}』 已移出踢黑名单")
 
         elif msg.startswith("踢"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 踢")
             try:
                 await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
-                await event.bot.send_group_msg(group_id=int(group_id), message=f"已踢出 {target_id}")
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"已踢出 『{target_id}』")
             except Exception as e:
                 logger.error(f"踢出失败 gid={group_id} uid={target_id}: {e}")
             else:
@@ -1565,7 +1565,7 @@ class AutoRecallKeywordPlugin(Star):
                     removed = await self._recall_recent_messages_of_user(event, int(group_id), target_id, self.recall_on_kick_count)
                     if removed > 0:
                         try:
-                            await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 最近 {removed} 条消息")
+                            await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 『{target_id}』 最近 {removed} 条消息")
                         except Exception:
                             pass
                 except Exception as e:
@@ -1576,14 +1576,14 @@ class AutoRecallKeywordPlugin(Star):
                 event.mark_action("敏感词插件 - 针对")
             self.target_user_list.add(target_id)
             self.save_json_data()
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入针对名单")
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"『{target_id}』 已加入针对名单")
 
         elif msg.startswith("解针对"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 解针对")
             self.target_user_list.discard(target_id)
             self.save_json_data()
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已移出针对名单")
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"『{target_id}』 已移出针对名单")
 
         elif msg.startswith("设置管理员"):
             if self.owner_qq and str(sender_id) != self.owner_qq:
@@ -1616,7 +1616,7 @@ class AutoRecallKeywordPlugin(Star):
                 event.mark_action("敏感词插件 - 加白")
             self.whitelist.add(target_id)
             self.save_json_data()
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"{target_id} 已加入白名单")
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"『{target_id}』 已加入白名单")
 
         elif msg.startswith("移白"):
             if hasattr(event, "mark_action"):
@@ -1644,7 +1644,7 @@ class AutoRecallKeywordPlugin(Star):
                         deleted += 1
                     except Exception as e:
                         logger.error(f"撤回 {target_id} 消息 {msg_data.get('message_id')} 失败: {e}")
-            await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 {target_id} 的 {deleted} 条消息")
+            await event.bot.send_group_msg(group_id=int(group_id), message=f"已撤回 『{target_id}』 的 {deleted} 条消息")
 
         elif msg.startswith("封杀"):
             if hasattr(event, "mark_action"):
