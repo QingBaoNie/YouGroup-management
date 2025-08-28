@@ -131,6 +131,7 @@ class AutoRecallKeywordPlugin(Star):
         ]
 
         # ==== 新增：HTML 渲染配置（用于 HTML→图片）====
+        # 注意：这里只放默认值；真正读取配置放到 initialize() 里
         self.html_render_enable = True          # True 则优先使用 HTML 渲染
         self.html_renderer      = "auto"        # auto | imgkit | html2image
         self.wkhtmltoimage_path = ""            # 指定 wkhtmltoimage 路径；留空自动探测
@@ -143,15 +144,6 @@ class AutoRecallKeywordPlugin(Star):
         # ==== 新增：统计数据（持久化到 json）====
         self.stats_file = "stats_data.json"
         self.stats_data = {}  # { "2025-08-28": { "group_id": { "user_id": count } } }
-        # ==== 新增：html_config 从配置读取 ====
-        html_cfg = config_data.get("html_config", {})
-        self.html_render_enable = bool(html_cfg.get("enable", self.html_render_enable))
-        self.html_renderer      = str(html_cfg.get("renderer", self.html_renderer)).lower()
-        self.wkhtmltoimage_path = str(html_cfg.get("wkhtmltoimage_path", self.wkhtmltoimage_path))
-        # 自动探测 wkhtmltoimage
-        if not self.wkhtmltoimage_path:
-        self.wkhtmltoimage_path = shutil.which("wkhtmltoimage") or ""
-
     # =========================================================
     # 初始化配置（从外部 config 注入、解析开关、打印日志）
     # =========================================================
@@ -224,6 +216,7 @@ class AutoRecallKeywordPlugin(Star):
         # --- 刷屏窗口长度根据配置重置 ---
         self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
         self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
+
         # ==== 新增：image_config / stats_config 从配置读取 ====
         img_cfg = config_data.get("image_config", {})
         self.img_font_path = img_cfg.get("font_path", self.img_font_path)
@@ -236,8 +229,8 @@ class AutoRecallKeywordPlugin(Star):
             parsed = []
             for s in pal:
                 try:
-                    r,g,b = map(int, s.split(","))
-                    parsed.append((r,g,b))
+                    r, g, b = map(int, s.split(","))
+                    parsed.append((r, g, b))
                 except Exception:
                     continue
             if parsed:
@@ -251,6 +244,19 @@ class AutoRecallKeywordPlugin(Star):
         _ensure_dir(self.img_save_dir)
         self._load_stats_data()
 
+        # ==== 读取 html_config 并自动探测 wkhtmltoimage ====
+        html_cfg = config_data.get("html_config", {})
+        self.html_render_enable = bool(html_cfg.get("enable", self.html_render_enable))
+        self.html_renderer      = str(html_cfg.get("renderer", self.html_renderer)).lower()
+        self.wkhtmltoimage_path = str(html_cfg.get("wkhtmltoimage_path", self.wkhtmltoimage_path))
+
+        # 自动探测（当 renderer 需要且未显式配置路径）
+        if self.html_renderer in ("auto", "imgkit"):
+            if not self.wkhtmltoimage_path:
+                self.wkhtmltoimage_path = shutil.which("wkhtmltoimage") or ""
+            if not self.wkhtmltoimage_path and self.html_renderer == "imgkit":
+                logger.error("未找到 wkhtmltoimage，可改用 html2image 或在 html_config.wkhtmltoimage_path 指定路径")
+
         # --- 启动日志 ---
         logger.info(f"主人QQ: {self.owner_qq or '(未配置)'}")
         logger.info(f"敏感词列表: {self.bad_words}")
@@ -262,6 +268,7 @@ class AutoRecallKeywordPlugin(Star):
         logger.info(f"入群邀请: auto_accept_owner_invite={self.auto_accept_owner_invite}, reject_non_owner_invite={self.reject_non_owner_invite}")
         logger.info(f"踢/踢黑后撤回最近条数: {self.recall_on_kick_count}")
         logger.info(f"权威条目: {len(self.authority_cert)}")
+        logger.info(f"HTML 渲染: enable={self.html_render_enable}, renderer={self.html_renderer}, wkhtmltoimage={self.wkhtmltoimage_path or '(未设置)'}")
 
     # =========================================================
     # 工具函数：从本地 JSON 恢复（若存在）—— 仅名单类
