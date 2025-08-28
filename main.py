@@ -70,6 +70,11 @@ class AutoRecallKeywordPlugin(Star):
 
         # —— 新增：独立文件
         self.auth_data_file = "auth_data.json"
+        # —— 群成员索引（避免单人查询超时/误判）
+        self._member_index: dict[int, dict[str, dict]] = {}  # { group_id: { "uid": rec, ... } }
+        self._member_index_built_at: dict[int, float] = {}   # { group_id: ts }
+        self._member_idx_ttl = 60  # 秒：索引过期时间，过期会自动重建
+
 
     # =========================================================
     # 初始化配置（从外部 config 注入、解析开关、打印日志）
@@ -343,19 +348,25 @@ class AutoRecallKeywordPlugin(Star):
         return len(s)
 
     # =========================================================
-    # 权限相关
+    # 权限相关（基于群成员索引）
     # =========================================================
+    def _role_of(self, rec: dict | None) -> str:
+        return (rec or {}).get("role", "member")
+
     async def _get_member_role(self, event: AstrMessageEvent, group_id: int, user_id: int) -> str:
+        # 先查索引，不在则强刷一次后再判定
         try:
-            info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(user_id))
-            return info.get("role", "member")
+            rec = await self.get_member_record(event, int(group_id), int(user_id))
+            return self._role_of(rec)
         except Exception as e:
-            logger.error(f"获取用户 {user_id} 在群 {group_id} 角色失败: {e}")
+            logger.error(f"获取用户 {user_id} 在群 {group_id} 角色失败(索引): {e}")
             return "member"
 
     async def _is_operator(self, event: AstrMessageEvent, group_id: int, user_id: int) -> bool:
+        # 主人直接放行
         if self.owner_qq and str(user_id) == self.owner_qq:
             return True
+        # 群主/管理 或 子管理员
         role = await self._get_member_role(event, group_id, user_id)
         if role in ("owner", "admin"):
             return True
@@ -382,10 +393,71 @@ class AutoRecallKeywordPlugin(Star):
             self_id = await self._get_self_user_id(event)
             if not self_id:
                 return False
-            info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(self_id))
-            return info.get('role', 'member') in ('owner', 'admin')
-        except Exception:
+            # 用索引判断机器人在该群的角色，避免 get_group_member_info 超时导致“假不存在”
+            rec = await self.get_member_record(event, int(group_id), int(self_id))
+            return self._role_of(rec) in ('owner', 'admin')
+        except Exception as e:
+            logger.error(f"判断机器人是否为管理员失败 gid={group_id}: {e}")
             return False
+
+    # =========================================================
+    # 群成员索引：一次性拉全量 → 本地字典查找，避免“成员不存在/超时”
+    # =========================================================
+    async def _refresh_group_member_index(self, event: AstrMessageEvent, group_id: int) -> dict[str, dict]:
+        """
+        拉取群成员列表并构建 {uid(str): member_info(dict)} 的索引。
+        某些适配器没有分页；有分页的可自行在这里做 while 翻页。
+        """
+        try:
+            raw = await event.bot.get_group_member_list(group_id=int(group_id))
+            # 兼容多种返回结构
+            if isinstance(raw, list):
+                members = raw
+            else:
+                members = raw.get("members") or raw.get("data") or []
+        except Exception as e:
+            logger.error(f"[member-index] 拉取群 {group_id} 成员列表失败: {e}")
+            members = []
+
+        index: dict[str, dict] = {}
+        for m in members:
+            try:
+                uid = str(m.get("user_id") or m.get("uid") or m.get("uin") or "")
+                if not uid:
+                    continue
+                index[uid] = m
+            except Exception:
+                continue
+
+        self._member_index[int(group_id)] = index
+        self._member_index_built_at[int(group_id)] = time.time()
+        logger.debug(f"[member-index] 群 {group_id} 已建索引，成员数={len(index)}")
+        return index
+
+    def _maybe_expired_member_index(self, group_id: int) -> bool:
+        ts = self._member_index_built_at.get(int(group_id), 0)
+        return (time.time() - ts) > self._member_idx_ttl
+
+    async def _ensure_member_index(self, event: AstrMessageEvent, group_id: int) -> dict[str, dict]:
+        """
+        返回可用的成员索引；如不存在或过期则自动重建。
+        """
+        if int(group_id) not in self._member_index or self._maybe_expired_member_index(group_id):
+            return await self._refresh_group_member_index(event, group_id)
+        return self._member_index[int(group_id)]
+
+    async def get_member_record(self, event: AstrMessageEvent, group_id: int, user_id: int) -> dict | None:
+        """
+        优先从索引取；没有则强制刷新一次再取。
+        """
+        idx = await self._ensure_member_index(event, group_id)
+        rec = idx.get(str(user_id))
+        if rec is not None:
+            return rec
+
+        # 可能是刚进群/改名导致缓存未命中 → 强刷一次
+        idx = await self._refresh_group_member_index(event, group_id)
+        return idx.get(str(user_id))
 
     # =========================================================
     # 入群邀请处理
@@ -733,12 +805,22 @@ class AutoRecallKeywordPlugin(Star):
     # 获取群内显示名（群名片优先，其次昵称，兜底用QQ号）
     # =========================================================
     async def _get_group_display_name(self, event: AstrMessageEvent, group_id: int, user_id: int) -> str:
+        # 索引优先
+        try:
+            rec = await self.get_member_record(event, int(group_id), int(user_id))
+            if rec:
+                name = (rec.get("card") or "").strip() or (rec.get("nickname") or "").strip()
+                return name or str(user_id)
+        except Exception:
+            pass
+        # 兜底：再去单查（可能还是会超时）
         try:
             info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(user_id))
             name = (info.get("card") or "").strip() or (info.get("nickname") or "").strip()
             return name or str(user_id)
         except Exception:
             return str(user_id)
+
     # 获取全局昵称（不在群内时用）
     async def _get_global_nickname(self, event: AstrMessageEvent, user_id: int | str) -> str:
         try:
@@ -750,13 +832,16 @@ class AutoRecallKeywordPlugin(Star):
     # 优先群内显示名，失败就退回全局昵称
     async def _resolve_display_name_anywhere(self, event: AstrMessageEvent, group_id: int, user_id: int | str) -> str:
         try:
-            info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(user_id))
-            name = (info.get("card") or "").strip() or (info.get("nickname") or "").strip()
-            if name:
-                return name
+            rec = await self.get_member_record(event, int(group_id), int(user_id))
+            if rec:
+                name = (rec.get("card") or "").strip() or (rec.get("nickname") or "").strip()
+                if name:
+                    return name
         except Exception:
             pass
+        # 不在群里就查全局昵称
         return await self._get_global_nickname(event, user_id)
+
 
     # 格式化列表 ["123","456"] → ["123(忧)","456(某某)"]
     async def _format_id_list_with_names(self, event: AstrMessageEvent, group_id: int, ids: list[str]) -> list[str]:
@@ -950,6 +1035,7 @@ class AutoRecallKeywordPlugin(Star):
                 return
         except Exception as e:
             logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
+
 
         # ---------- 黑名单：发言触发兜底（只在当前群处理+撤回） ----------
         if str(sender_id) in self.kick_black_list:
@@ -1509,10 +1595,11 @@ class AutoRecallKeywordPlugin(Star):
 
                 # 当前群按规则处理：机器人需为管理；目标若为管理则忽略
                 try:
-                    t_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(target_id))
-                    t_role = str(t_info.get("role", "member"))
+                    rec = await self.get_member_record(event, int(group_id), int(target_id))
+                    t_role = str((rec or {}).get("role", "member"))
                 except Exception:
                     t_role = "member"
+
 
                 bot_is_admin = await self._bot_is_admin(event, int(group_id))
 
