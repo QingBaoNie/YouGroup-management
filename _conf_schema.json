@@ -125,14 +125,9 @@
     "default": []
   },
   "image_config": {
-    "description": "发言榜单/个人发言卡片 图片渲染配置（支持第三方/Google 免费字体）",
+    "description": "发言榜单/个人发言卡片 图片渲染配置",
     "type": "object",
     "items": {
-      "font_path": {
-        "description": "字体文件路径（建议使用 Google Noto Sans SC 等中文字体，如 fonts/NotoSansSC-Regular.otf）",
-        "type": "string",
-        "default": "fonts/NotoSansSC-Regular.otf"
-      },
       "save_dir": {
         "description": "生成图片缓存目录（不存在会自动创建）",
         "type": "string",
@@ -192,6 +187,27 @@
         "description": "是否统计已被撤回的消息（true=计入，false=不计）",
         "type": "bool",
         "default": true
+      }
+    }
+  },
+  "html_config": {
+    "description": "HTML 渲染配置（用于 HTML→图片 渲染排行榜/卡片）",
+    "type": "object",
+    "items": {
+      "enable": {
+        "description": "是否启用 HTML 渲染（true=优先使用 HTML 渲染，false=仅用 Pillow 绘图）",
+        "type": "bool",
+        "default": true
+      },
+      "renderer": {
+        "description": "渲染引擎，可选 auto|imgkit|html2image",
+        "type": "string",
+        "default": "auto"
+      },
+      "wkhtmltoimage_path": {
+        "description": "wkhtmltoimage 可执行文件路径（留空自动探测）",
+        "type": "string",
+        "default": ""
       }
     }
   }
