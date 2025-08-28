@@ -478,14 +478,18 @@ def _pick_font(self, size=32):
     # =========================================================
     def save_json_data(self):
         data = {
-            'kick_black_list': list(self.kick_black_list),
-            'target_user_list': list(self.target_user_list),
-            'sub_admin_list': list(self.sub_admin_list),
-            'whitelist': list(self.whitelist),
+            "kick_black_list": list(self.kick_black_list),
+            "target_user_list": list(self.target_user_list),
+            "sub_admin_list": list(self.sub_admin_list),
+            "whitelist": list(self.whitelist),
         }
-        with open('cesn_data.json', 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        logger.info("已保存名单类数据到 cesn_data.json")
+        try:
+            with open("cesn_data.json", "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            logger.info("已保存名单类数据到 cesn_data.json")
+        except Exception as e:
+            logger.error(f"保存 cesn_data.json 失败：{e}")
+
 
     # =========================================================
     # 工具函数：延迟自动撤回指定 message_id
