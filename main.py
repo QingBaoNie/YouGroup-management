@@ -70,8 +70,12 @@ class AutoRecallKeywordPlugin(Star):
 
         # —— 新增：独立文件
         self.auth_data_file = "auth_data.json"
+
         # —— 群成员索引（避免单人查询超时/误判）
+        self._member_index: dict[int, dict[str, dict]] = {}      # { group_id: { uid: rec } }
+        self._member_index_built_at: dict[int, float] = {}       # { group_id: ts }
         self._member_idx_ttl = 60  # 秒：索引过期时间，过期会自动重建
+
     # =========================================================
     # 初始化配置（从外部 config 注入、解析开关、打印日志）
     # =========================================================
