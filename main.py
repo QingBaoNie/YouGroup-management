@@ -260,30 +260,27 @@ class AutoRecallKeywordPlugin(Star):
                 logger.info(f"[talk] 已清空群 {group_id} 的统计数据")
         except Exception as e:
             logger.error(f"[talk] 删除群统计目录失败 gid={group_id}: {e}")
-
-
-# =========================================================
-# 工具函数：从本地 JSON 恢复（若存在）—— 仅名单类
-# =========================================================
-def _load_json_data(self):
-    try:
-        with open('cesn_data.json', 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        self.kick_black_list = set(data.get('kick_black_list', []))
-        self.target_user_list = set(data.get('target_user_list', []))
-        self.sub_admin_list = set(data.get('sub_admin_list', []))
-        self.whitelist = set(data.get('whitelist', []))
-        logger.info("已从 cesn_data.json 加载名单类数据")
-    except FileNotFoundError:
-        logger.info("首次运行：未发现 cesn_data.json，将在后续保存时创建。")
-    except Exception as e:
-        logger.error(f"读取 cesn_data.json 失败：{e}")
+    # =========================================================
+    # 工具函数：从本地 JSON 恢复（仅名单类）
+    # =========================================================
+    def _load_json_data(self):
+        try:
+            with open('cesn_data.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            self.kick_black_list = set(data.get('kick_black_list', []))
+            self.target_user_list = set(data.get('target_user_list', []))
+            self.sub_admin_list = set(data.get('sub_admin_list', []))
+            self.whitelist = set(data.get('whitelist', []))
+            logger.info("已从 cesn_data.json 加载名单类数据")
+        except FileNotFoundError:
+            logger.info("首次运行：未发现 cesn_data.json，将在后续保存时创建。")
+        except Exception as e:
+            logger.error(f"读取 cesn_data.json 失败：{e}")
 
     # =========================================================
-    # 新增：数据独立读写 + 旧数据迁移
+    # 认证数据：独立读写 + 旧数据迁移
     # =========================================================
     def _load_auth_data(self):
-        # 1) 尝试直接读 auth_data.json
         try:
             with open(self.auth_data_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -295,7 +292,7 @@ def _load_json_data(self):
         except Exception as e:
             logger.error(f"读取 {self.auth_data_file} 失败：{e}")
 
-        # 2) 不存在则尝试从旧 cesn_data.json 迁移
+        # 尝试旧文件迁移
         try:
             with open("cesn_data.json", "r", encoding="utf-8") as f:
                 old = json.load(f)
@@ -303,7 +300,7 @@ def _load_json_data(self):
             if old_map:
                 self.authority_cert = old_map
                 self.save_auth_data()
-                # 清理旧文件内的 authority_cert 字段，避免重复
+                # 清理旧文件中的 authority_cert
                 try:
                     del old["authority_cert"]
                     with open("cesn_data.json", "w", encoding="utf-8") as f:
@@ -319,8 +316,7 @@ def _load_json_data(self):
             self.save_auth_data()
         except Exception as e:
             logger.error(f"迁移旧认证数据失败：{e}")
-            # 兜底：写一个空文件
-            self.save_auth_data()
+            self.save_auth_data()  # 兜底
 
     def save_auth_data(self):
         data = {"authority_cert": self.authority_cert}
@@ -332,7 +328,7 @@ def _load_json_data(self):
             logger.error(f"保存 {self.auth_data_file} 失败：{e}")
 
     # =========================================================
-    # 工具函数：将内存数据保存到本地（名单类）
+    # 工具函数：保存名单类数据
     # =========================================================
     def save_json_data(self):
         data = {
@@ -341,9 +337,13 @@ def _load_json_data(self):
             'sub_admin_list': list(self.sub_admin_list),
             'whitelist': list(self.whitelist),
         }
-        with open('cesn_data.json', 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        logger.info("已保存名单类数据到 cesn_data.json")
+        try:
+            with open('cesn_data.json', 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            logger.info("已保存名单类数据到 cesn_data.json")
+        except Exception as e:
+            logger.error(f"保存 cesn_data.json 失败: {e}")
+
     async def _safe_call(self, bot, action: str, **params):
         """统一调用 API，失败时只打日志不抛异常"""
         try:
@@ -739,46 +739,58 @@ def _load_json_data(self):
             return None
 
         try:
-            # 字体（Windows/Linux/Mac 可能不同，这里用内置 DejaVuSans 兜底）
-            try:
-                font = ImageFont.truetype("msyh.ttc", 28)  # 微软雅黑
-            except Exception:
-                font = ImageFont.load_default()
+            # 字体加载：优先微软雅黑 -> DejaVuSans -> 内置
+            def _load_font(name: str, size: int):
+                try:
+                    return ImageFont.truetype(name, size)
+                except Exception:
+                    return None
 
-            title_font = ImageFont.truetype("msyh.ttc", 36) if font else ImageFont.load_default()
+            font = (
+                _load_font("msyh.ttc", 28) or
+                _load_font("DejaVuSans.ttf", 28) or
+                ImageFont.load_default()
+            )
+            title_font = (
+                _load_font("msyh.ttc", 36) or
+                _load_font("DejaVuSans-Bold.ttf", 36) or
+                font
+            )
 
             padding = 20
-            line_height = 50
-            width = 700
-            height = padding * 2 + line_height * (len(items) + 2)
+            line_height = 45
+            width = 720
+            height = padding * 2 + line_height * (len(items) + 3)
 
-            img = Image.new("RGB", (width, height), (245, 245, 245))
+            img = Image.new("RGB", (width, height), (250, 250, 250))
             draw = ImageDraw.Draw(img)
 
             # 标题
-            draw.text((padding, padding), title, font=title_font, fill=(30, 30, 30))
+            draw.text((padding, padding), title, font=title_font, fill=(20, 20, 20))
 
             # 表头
             y = padding + line_height
-            draw.text((padding, y), "排名", font=font, fill=(50, 50, 50))
-            draw.text((padding + 100, y), "昵称", font=font, fill=(50, 50, 50))
-            draw.text((padding + 450, y), "发言数", font=font, fill=(50, 50, 50))
+            draw.text((padding, y), "排名", font=font, fill=(60, 60, 60))
+            draw.text((padding + 100, y), "昵称", font=font, fill=(60, 60, 60))
+            draw.text((padding + 480, y), "发言数", font=font, fill=(60, 60, 60))
 
             # 数据行
             for i, (rank_str, name, cnt) in enumerate(items, start=1):
                 y = padding + line_height * (i + 1)
-                draw.text((padding, y), rank_str, font=font, fill=(20, 20, 20))
-                draw.text((padding + 100, y), str(name), font=font, fill=(20, 20, 20))
-                draw.text((padding + 450, y), str(cnt), font=font, fill=(20, 20, 20))
+                draw.text((padding, y), rank_str, font=font, fill=(10, 10, 10))
+                draw.text((padding + 100, y), str(name), font=font, fill=(10, 10, 10))
+                draw.text((padding + 480, y), str(cnt), font=font, fill=(10, 10, 10))
 
             # 保存文件
             os.makedirs("talk_stats/tmp", exist_ok=True)
             file_path = f"talk_stats/tmp/rank_{int(time.time())}.png"
             img.save(file_path, "PNG")
             return file_path
+
         except Exception as e:
             logger.error(f"[排行榜渲染] 失败: {e}")
             return None
+
 
     # =========================================================
     # 主动退群命令（仅主人）
@@ -1084,8 +1096,25 @@ def _load_json_data(self):
         self_id = await self._get_self_user_id(event)
         if self_id and str(user_id) == str(self_id):
             # 机器人退群/被踢，清理该群统计数据
+            self._cleanup_group_data(group_id)
+            logger.info(f"[退群清理] 机器人已退出群 {group_id}，清理完成。")
+
+    def _cleanup_group_data(self, group_id: int):
+        """
+        清理某群的所有数据（发言统计、索引缓存等）。
+        """
+        try:
+            # 删除发言统计
             self._delete_group_talk_data(group_id)
-            logger.info(f"[退群清理] 机器人已退出群 {group_id}，清理数据完成。")
+
+            # 删除成员索引缓存
+            self._member_index.pop(group_id, None)
+            self._member_index_built_at.pop(group_id, None)
+
+            logger.info(f"[群清理] 群 {group_id} 的数据已清理完成。")
+        except Exception as e:
+            logger.error(f"[群清理] 群 {group_id} 清理失败: {e}")
+
 
     # =========================================================
     # 核心入口：群消息自动处理
@@ -1113,11 +1142,11 @@ def _load_json_data(self):
         if handled:
             try:
                 target_gid = re.search(r"(\d{4,12})", message_str).group(1)
-                self._delete_group_talk_data(int(target_gid))
-                logger.info(f"[退群清理] 主人命令退群 {target_gid}，已清理数据。")
+                self._cleanup_group_data(int(target_gid))
             except Exception as e:
                 logger.error(f"[退群清理] 失败: {e}")
             return
+
 
 
         # ---------- 新增：我的身份 ----------
@@ -1150,6 +1179,7 @@ def _load_json_data(self):
                 await self._safe_send_group_msg(event.bot, group_id, "今天还没有任何发言记录。")
                 return
 
+            # 取前10
             top = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:10]
             items = []
             for rank, (uid, cnt) in enumerate(top, 1):
@@ -1158,13 +1188,14 @@ def _load_json_data(self):
 
             img_path = self._render_talk_rank_image("📊 今日发言日榜（前10）", items)
             if img_path:
-                msg = [{"type": "image", "data": {"file": img_path}}]
-                await event.bot.send_group_msg(group_id=int(group_id), message=msg)
+                await event.bot.send_group_msg(
+                    group_id=int(group_id),
+                    message=[{"type": "image", "data": {"file": img_path}}]
+                )
             else:
-                lines = [f"{r}. {n}({u}) - {c}条" for r, (u, c) in enumerate(top, 1)
-                         for n in [await self._resolve_display_name_anywhere(event, int(group_id), u)]]
-                text = "📊 今日发言日榜（前10）\n" + "\n".join(lines)
-                await self._safe_send_group_msg(event.bot, group_id, text)
+                lines = [f"{rank}. {name}({uid}) - {cnt}条" for rank, (uid, cnt) in enumerate(top, 1)
+                         for name in [await self._resolve_display_name_anywhere(event, int(group_id), uid)]]
+                await self._safe_send_group_msg(event.bot, group_id, "📊 今日发言日榜（前10）\n" + "\n".join(lines))
             return
 
         # ---------- 发言周榜 ----------
@@ -1182,13 +1213,14 @@ def _load_json_data(self):
 
             img_path = self._render_talk_rank_image("📊 最近7天发言周榜（前10）", items)
             if img_path:
-                msg = [{"type": "image", "data": {"file": img_path}}]
-                await event.bot.send_group_msg(group_id=int(group_id), message=msg)
+                await event.bot.send_group_msg(
+                    group_id=int(group_id),
+                    message=[{"type": "image", "data": {"file": img_path}}]
+                )
             else:
-                lines = [f"{r}. {n}({u}) - {c}条" for r, (u, c) in enumerate(top, 1)
-                         for n in [await self._resolve_display_name_anywhere(event, int(group_id), u)]]
-                text = "📊 最近7天发言周榜（前10）\n" + "\n".join(lines)
-                await self._safe_send_group_msg(event.bot, group_id, text)
+                lines = [f"{rank}. {name}({uid}) - {cnt}条" for rank, (uid, cnt) in enumerate(top, 1)
+                         for name in [await self._resolve_display_name_anywhere(event, int(group_id), uid)]]
+                await self._safe_send_group_msg(event.bot, group_id, "📊 最近7天发言周榜（前10）\n" + "\n".join(lines))
             return
 
         # ---------- 我的发言 ----------
@@ -1198,15 +1230,15 @@ def _load_json_data(self):
             cnt = int(counts.get(str(sender_id), 0))
             name = await self._resolve_display_name_anywhere(event, int(group_id), sender_id)
 
-            img_path = self._render_talk_rank_image("👤 我的发言", [( "1", name, cnt )])
+            img_path = self._render_talk_rank_image("👤 我的发言", [("1", name, cnt)])
             if img_path:
-                msg = [{"type": "image", "data": {"file": img_path}}]
-                await event.bot.send_group_msg(group_id=int(group_id), message=msg)
+                await event.bot.send_group_msg(
+                    group_id=int(group_id),
+                    message=[{"type": "image", "data": {"file": img_path}}]
+                )
             else:
-                text = f"👤 {name}({sender_id})\n今日发言：{cnt} 条"
-                await self._safe_send_group_msg(event.bot, group_id, text)
+                await self._safe_send_group_msg(event.bot, group_id, f"👤 {name}({sender_id})\n今日发言：{cnt} 条")
             return
-
 
         # ---------- 我要看美女 ----------
         if "我要看美女" in message_str:
