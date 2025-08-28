@@ -242,6 +242,26 @@ class AutoRecallKeywordPlugin(Star):
         with open('cesn_data.json', 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info("已保存名单类数据到 cesn_data.json")
+    async def _safe_call(self, bot, action: str, **params):
+        """统一调用 API，失败时只打日志不抛异常"""
+        try:
+            return await bot.call_action(action, **params)
+        except Exception as e:
+            logger.error(f"[safe-call] action={action} params={params} 失败: {e}")
+            return None
+
+    async def _safe_send_group_msg(self, bot, group_id: int, message):
+        return await self._safe_call(bot, "send_group_msg", group_id=int(group_id), message=message)
+
+    async def _safe_delete_msg(self, bot, message_id: int):
+        return await self._safe_call(bot, "delete_msg", message_id=message_id)
+
+    async def _safe_set_group_ban(self, bot, group_id: int, user_id: int, duration: int):
+        return await self._safe_call(bot, "set_group_ban", group_id=int(group_id), user_id=int(user_id), duration=duration)
+
+    async def _safe_set_group_kick(self, bot, group_id: int, user_id: int, reject_add_request: bool = False):
+        return await self._safe_call(bot, "set_group_kick", group_id=int(group_id), user_id=int(user_id), reject_add_request=reject_add_request)
+    
     # =========================================================
     # 工具函数：延迟自动撤回指定 message_id
     # =========================================================
@@ -726,7 +746,7 @@ class AutoRecallKeywordPlugin(Star):
             if now - self.user_message_times[key][0] <= self.spam_interval:
                 if await self._bot_is_admin(event, int(group_id)):
                     try:
-                        await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
+                        await self._safe_set_group_ban(event.bot, group_id, sender_id, self.spam_ban_duration)
                         logger.error(f"触发【刷屏】已禁言 uid={sender_id} {self.spam_ban_duration}s，gid={group_id}")
                     except Exception as e:
                         logger.error(f"刷屏禁言失败 gid={group_id} uid={sender_id}: {e}")
@@ -745,7 +765,7 @@ class AutoRecallKeywordPlugin(Star):
         # 工具：发送并返回 message_id（失败返回 None）
         async def _send(text: str) -> int | None:
             try:
-                resp = await event.bot.send_group_msg(group_id=int(group_id), message=text)
+                resp = await self._safe_send_group_msg(event.bot, group_id, text)
                 if isinstance(resp, dict) and "message_id" in resp:
                     return resp["message_id"]
             except Exception as e:
@@ -923,7 +943,7 @@ class AutoRecallKeywordPlugin(Star):
             except Exception:
                 pass
 
-            await event.bot.send_group_msg(group_id=int(group_id), message=text)
+            await self._safe_send_group_msg(event.bot, group_id, text)
             return
         # ---------- 我要看美女 ----------
         if "我要看美女" in message_str:
@@ -1138,7 +1158,7 @@ class AutoRecallKeywordPlugin(Star):
             if now - self.user_message_times[key][0] <= self.spam_interval:
                 if await self._bot_is_admin(event, int(group_id)):
                     logger.error(f"触发【刷屏】已禁言并批量撤回！")
-                    await event.bot.set_group_ban(group_id=int(group_id), user_id=int(sender_id), duration=self.spam_ban_duration)
+                    await self._safe_set_group_ban(event.bot, group_id, sender_id, self.spam_ban_duration)
                     for msg_id in list(self.user_message_ids[key]):
                         try:
                             await event.bot.delete_msg(message_id=msg_id)
@@ -1508,7 +1528,7 @@ class AutoRecallKeywordPlugin(Star):
             items = list(self.whitelist)
             lines = await self._format_id_list_with_names(event, int(group_id), items)
             text = "以下为 白名单QQ 总计{}\n{}".format(len(items), ("\n".join(lines) if lines else "（空）"))
-            await event.bot.send_group_msg(group_id=int(group_id), message=text)
+            await self._safe_send_group_msg(event.bot, group_id, text)
             return
 
         if msg.startswith("黑名单列表"):
@@ -1517,7 +1537,7 @@ class AutoRecallKeywordPlugin(Star):
             items = list(self.kick_black_list)
             lines = await self._format_id_list_with_names(event, int(group_id), items)
             text = "以下为 黑名单QQ 总计{}\n{}".format(len(items), ("\n".join(lines) if lines else "（空）"))
-            await event.bot.send_group_msg(group_id=int(group_id), message=text)
+            await self._safe_send_group_msg(event.bot, group_id, text)
             return
 
         if msg.startswith("针对列表"):
@@ -1526,7 +1546,7 @@ class AutoRecallKeywordPlugin(Star):
             items = list(self.target_user_list)
             lines = await self._format_id_list_with_names(event, int(group_id), items)
             text = "以下为 针对名单QQ 总计{}\n{}".format(len(items), ("\n".join(lines) if lines else "（空）"))
-            await event.bot.send_group_msg(group_id=int(group_id), message=text)
+            await self._safe_send_group_msg(event.bot, group_id, text)
             return
 
         if msg.startswith("管理员列表"):
@@ -1535,7 +1555,7 @@ class AutoRecallKeywordPlugin(Star):
             items = list(self.sub_admin_list)
             lines = await self._format_id_list_with_names(event, int(group_id), items)
             text = "以下为 子管理员QQ 总计{}\n{}".format(len(items), ("\n".join(lines) if lines else "（空）"))
-            await event.bot.send_group_msg(group_id=int(group_id), message=text)
+            await self._safe_send_group_msg(event.bot, group_id, text)
             return
 
         # 需要目标QQ的命令：支持 @ 与 #QQ号
