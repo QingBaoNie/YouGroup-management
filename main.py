@@ -924,6 +924,7 @@ class AutoRecallKeywordPlugin(Star):
             "黑名单列表", "针对列表", "管理员列表",
             "封杀",
             "认证", "移除认证",  # 新增：权威认证命令（仅主人）
+            "清空白名单",          # 新增：清空白名单
         )
         if message_str.startswith(command_keywords):
             # 特判：认证类命令放到 _is_operator 检查之前，因为它需要更严格（仅主人）
@@ -1379,6 +1380,34 @@ class AutoRecallKeywordPlugin(Star):
             except Exception as e:
                 logger.error(f"开启全体禁言失败: {e}")
             return
+
+        # —— 特权命令：清空白名单（仅主人），放在权限校验之前确保非主人统一得到“无权使用”
+        if msg.startswith("清空白名单"):
+            # owner 未配置 或 不是 owner → 无权使用（自动撤回）
+            if not self.owner_qq or str(sender_id) != self.owner_qq:
+                try:
+                    resp = await event.bot.send_group_msg(group_id=int(group_id), message="无权使用")
+                    if isinstance(resp, dict) and "message_id" in resp:
+                        asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=10))
+                except Exception as e:
+                    logger.error(f"发送无权使用提示失败: {e}")
+                return
+
+            # 仅主人
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 清空白名单")
+            try:
+                self.whitelist.clear()
+                self.save_json_data()
+                await event.bot.send_group_msg(group_id=int(group_id), message="已清空白名单！")
+            except Exception as e:
+                logger.error(f"清空白名单失败: {e}")
+                try:
+                    await event.bot.send_group_msg(group_id=int(group_id), message="清空白名单失败，请查看日志")
+                except Exception:
+                    pass
+            return
+
 
         if msg.startswith("全体解言"):
             if hasattr(event, "mark_action"):
