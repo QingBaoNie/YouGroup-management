@@ -952,7 +952,6 @@ def _build_rank_html(self, title: str, rows: list[tuple[str, int]]) -> str:
     </div></body></html>"""
     return html
 
-
 def _build_mycard_html(self, name: str, uid: str, cnt: int) -> str:
     css = """
     <style>
@@ -979,8 +978,6 @@ def _build_mycard_html(self, name: str, uid: str, cnt: int) -> str:
       <div class="foot">生成时间：{now}</div>
     </div></body></html>"""
     return html
-
-
 def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
     if not self.html_render_enable:
         return None
@@ -992,15 +989,13 @@ def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
         options = {
             "format": "png",
             "encoding": "utf-8",
-            "width": str(self.img_width),   # 900
+            "width": str(self.img_width),
             "quality": "100",
-            "disable-smart-shrinking": "",  # 禁止自动缩小，避免糊
-            "dpi": "192",                   # 144~300 都可以，越大越清晰
-            "zoom": "2",                    # 放大渲染，文字更锐利
-            "enable-local-file-access": ""  # 如有本地资源时需要
+            "disable-smart-shrinking": "",
+            "dpi": "192",
+            "zoom": "2",
+            "enable-local-file-access": ""
         }
-
-        # 明确路径（优先配置项，其次默认 /usr/bin/wkhtmltoimage）
         wk_path = (self.wkhtmltoimage_path or "/usr/bin/wkhtmltoimage")
         try:
             cfg = imgkit.config(wkhtmltoimage=wk_path)
@@ -1010,7 +1005,8 @@ def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
         try:
             if cfg:
                 imgkit.from_string(html, out, options=options, config=cfg)
-                return out if os.path.exists(out) else None
+                if os.path.exists(out):
+                    return out
         except Exception as e:
             logger.error(f"[HTML] imgkit 渲染失败: {e}")
 
@@ -1021,12 +1017,12 @@ def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
             fname = f"{out_prefix}_{int(time.time())}.png"
             hti.screenshot(html_str=html, save_as=fname, size=(self.img_width, None))
             path = os.path.join(self.img_save_dir, fname)
-            return path if os.path.exists(path) else None
+            if os.path.exists(path):
+                return path
         except Exception as e:
             logger.error(f"[HTML] html2image 渲染失败: {e}")
 
     return None
-
 
     def _to_cq_image_base64(self, path: str) -> str | None:
         try:
