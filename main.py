@@ -3,6 +3,7 @@ import json
 import re
 import urllib.parse
 import asyncio
+import base64
 import os
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict, deque
@@ -864,7 +865,7 @@ class AutoRecallKeywordPlugin(Star):
     # =========================================================
     def _to_cq_image_file(self, path: str) -> str:
         abs_path = os.path.abspath(path)  # 转绝对路径
-        return "file:///" + abs_path.replace("\\", "/")  # Windows 路径转 /
+        return "file:///" + abs_path.replace("\\", "/")  # Windows 路径转 /，Linux 保持正常
 
     async def _handle_rank(self, event: AstrMessageEvent, mode: str = "day"):
         gid = str(event.get_group_id())
@@ -927,7 +928,6 @@ class AutoRecallKeywordPlugin(Star):
                 group_id=int(gid),
                 message=f"{name} 今日已发送 {cnt} 条消息"
             )
-
 
     # =========================================================
     # 娱乐功能：封杀倒计时（跳着撤回）+ 最终尝试禁言60秒
