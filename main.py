@@ -219,15 +219,14 @@ class AutoRecallKeywordPlugin(Star):
             logger.error(f"迁移旧认证数据失败：{e}")
             # 兜底：写一个空文件
             self.save_auth_data()
-
-    def save_auth_data(self):
-        data = {"authority_cert": self.authority_cert}
-        try:
-            with open(self.auth_data_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.info(f"已保存认证数据到 {self.auth_data_file}")
-        except Exception as e:
-            logger.error(f"保存 {self.auth_data_file} 失败：{e}")
+def save_auth_data(self):
+    """保存认证数据到 auth_data.json"""
+    try:
+        with open(AUTH_FILE, "w", encoding="utf-8") as f:
+            json.dump(self.authority_cert, f, ensure_ascii=False, indent=2)
+        logger.info("已保存认证数据到 auth_data.json")
+    except Exception as e:
+        logger.error(f"保存认证数据失败: {e}")
 async def _safe_send_image_msg(self, event, group_id: int, text_lines: list[str], target_uid: str):
     avatar = await _get_avatar_bytes(target_uid)  # 获取目标用户的头像
     image_bytes = create_image(avatar, text_lines)  # 渲染文本为图片
