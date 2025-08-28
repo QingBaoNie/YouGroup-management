@@ -1477,7 +1477,7 @@ class AutoRecallKeywordPlugin(Star):
             duration = minutes * 60
             try:
                 await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=duration)
-                await event.bot.send_group_msg(group_id=int(group_id), message=f"已禁言 {target_id} {minutes} 分钟")
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"已禁言 『{target_id}』 {minutes} 分钟")
             except Exception as e:
                 logger.error(f"禁言失败 gid={group_id} uid={target_id}: {e}")
 
@@ -1486,7 +1486,7 @@ class AutoRecallKeywordPlugin(Star):
                 event.mark_action("敏感词插件 - 解禁")
             try:
                 await event.bot.set_group_ban(group_id=int(group_id), user_id=int(target_id), duration=0)
-                await event.bot.send_group_msg(group_id=int(group_id), message=f"已解除 {target_id} 禁言")
+                await event.bot.send_group_msg(group_id=int(group_id), message=f"已解除 『{target_id}』 禁言")
             except Exception as e:
                 logger.error(f"解禁失败 gid={group_id} uid={target_id}: {e}")
 
