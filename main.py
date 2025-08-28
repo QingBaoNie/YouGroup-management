@@ -726,70 +726,63 @@ class AutoRecallKeywordPlugin(Star):
         if pos < len(text):
             segments.append({"type": "text", "data": {"text": text[pos:]}})
         return segments if segments else [{"type": "text", "data": {"text": text}}]
-    # =========================================================
-    # 发言排行榜渲染为图片（使用 Pillow）
-    # =========================================================
-    def _render_talk_rank_image(self, title: str, items: list[tuple[str, str, int]]) -> str | None:
-        """
-        渲染排行榜为图片并保存到临时文件。
-        items: [(rank_str, name, count), ...]
-        return: 文件路径，失败则返回 None
-        """
-        if not _PIL_OK:
-            return None
+import base64
+from io import BytesIO
+
+def _render_talk_rank_image(self, title: str, items: list[tuple[str, str, int]]) -> str | None:
+    """
+    渲染排行榜为图片并返回 base64 编码（base64://xxx）。
+    items: [(rank_str, name, count), ...]
+    return: base64://xxx 失败返回 None
+    """
+    if not _PIL_OK:
+        return None
+
+    try:
+        # 字体（Windows/Linux/Mac 不同，这里尝试微软雅黑，失败用默认）
+        try:
+            font = ImageFont.truetype("msyh.ttc", 28)  # 微软雅黑
+        except Exception:
+            font = ImageFont.load_default()
 
         try:
-            # 字体加载：优先微软雅黑 -> DejaVuSans -> 内置
-            def _load_font(name: str, size: int):
-                try:
-                    return ImageFont.truetype(name, size)
-                except Exception:
-                    return None
+            title_font = ImageFont.truetype("msyh.ttc", 36)
+        except Exception:
+            title_font = ImageFont.load_default()
 
-            font = (
-                _load_font("msyh.ttc", 28) or
-                _load_font("DejaVuSans.ttf", 28) or
-                ImageFont.load_default()
-            )
-            title_font = (
-                _load_font("msyh.ttc", 36) or
-                _load_font("DejaVuSans-Bold.ttf", 36) or
-                font
-            )
+        padding = 20
+        line_height = 50
+        width = 700
+        height = padding * 2 + line_height * (len(items) + 2)
 
-            padding = 20
-            line_height = 45
-            width = 720
-            height = padding * 2 + line_height * (len(items) + 3)
+        img = Image.new("RGB", (width, height), (245, 245, 245))
+        draw = ImageDraw.Draw(img)
 
-            img = Image.new("RGB", (width, height), (250, 250, 250))
-            draw = ImageDraw.Draw(img)
+        # 标题
+        draw.text((padding, padding), title, font=title_font, fill=(30, 30, 30))
 
-            # 标题
-            draw.text((padding, padding), title, font=title_font, fill=(20, 20, 20))
+        # 表头
+        y = padding + line_height
+        draw.text((padding, y), "排名", font=font, fill=(50, 50, 50))
+        draw.text((padding + 100, y), "昵称", font=font, fill=(50, 50, 50))
+        draw.text((padding + 450, y), "发言数", font=font, fill=(50, 50, 50))
 
-            # 表头
-            y = padding + line_height
-            draw.text((padding, y), "排名", font=font, fill=(60, 60, 60))
-            draw.text((padding + 100, y), "昵称", font=font, fill=(60, 60, 60))
-            draw.text((padding + 480, y), "发言数", font=font, fill=(60, 60, 60))
+        # 数据行
+        for i, (rank_str, name, cnt) in enumerate(items, start=1):
+            y = padding + line_height * (i + 1)
+            draw.text((padding, y), rank_str, font=font, fill=(20, 20, 20))
+            draw.text((padding + 100, y), str(name), font=font, fill=(20, 20, 20))
+            draw.text((padding + 450, y), str(cnt), font=font, fill=(20, 20, 20))
 
-            # 数据行
-            for i, (rank_str, name, cnt) in enumerate(items, start=1):
-                y = padding + line_height * (i + 1)
-                draw.text((padding, y), rank_str, font=font, fill=(10, 10, 10))
-                draw.text((padding + 100, y), str(name), font=font, fill=(10, 10, 10))
-                draw.text((padding + 480, y), str(cnt), font=font, fill=(10, 10, 10))
+        # 转成 Base64
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        return "base64://" + b64
+    except Exception as e:
+        logger.error(f"[排行榜渲染] 失败: {e}")
+        return None
 
-            # 保存文件
-            os.makedirs("talk_stats/tmp", exist_ok=True)
-            file_path = f"talk_stats/tmp/rank_{int(time.time())}.png"
-            img.save(file_path, "PNG")
-            return file_path
-
-        except Exception as e:
-            logger.error(f"[排行榜渲染] 失败: {e}")
-            return None
 
 
     # =========================================================
