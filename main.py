@@ -1,12 +1,10 @@
 import time
-import os
-import shutil
 import json
 import re
 import urllib.parse
 import asyncio
 from collections import defaultdict, deque
-from datetime import datetime, timedelta
+
 from astrbot import logger
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import filter
@@ -19,12 +17,7 @@ try:
 except Exception:  # 兜底：如果环境没装 aiohttp，这里给出占位提示
     aiohttp = None
     logger.error("未检测到 aiohttp，‘我要看美女’接口将无法调用，请安装 aiohttp。")
-try:
-    from PIL import Image, ImageDraw, ImageFont
-    _PIL_OK = True
-except Exception:
-    _PIL_OK = False
-    logger.error("未检测到 Pillow（PIL），发言统计将只输出文本。建议 pip install pillow")
+
 
 @register(
     "YouGroup-management",
@@ -82,9 +75,6 @@ class AutoRecallKeywordPlugin(Star):
         self._member_index: dict[int, dict[str, dict]] = {}      # { group_id: { uid: rec } }
         self._member_index_built_at: dict[int, float] = {}       # { group_id: ts }
         self._member_idx_ttl = 60  # 秒：索引过期时间，过期会自动重建
-        # === 发言统计配置 ===
-        self.talk_base_dir = "talk_stats"   # 根目录：talk_stats/<group_id>/stats.json
-        self.talk_keep_days = 60            # 保留最近 60 天
 
     # =========================================================
     # 初始化配置（从外部 config 注入、解析开关、打印日志）
@@ -171,97 +161,7 @@ class AutoRecallKeywordPlugin(Star):
         logger.info(f"踢/踢黑后撤回最近条数: {self.recall_on_kick_count}")
         logger.info(f"权威条目: {len(self.authority_cert)}")
     # =========================================================
-    # 发言统计工具函数 - 每群独立存储
-    # =========================================================
-    def _stats_dir_of(self, group_id: int) -> str:
-        """返回某群的统计目录路径"""
-        return os.path.join(self.talk_base_dir, str(group_id))
-
-    def _stats_file_of(self, group_id: int) -> str:
-        """返回某群的统计文件路径"""
-        return os.path.join(self._stats_dir_of(group_id), "stats.json")
-
-    def _load_group_stats(self, group_id: int) -> dict:
-        """加载某群的统计文件"""
-        path = self._stats_file_of(group_id)
-        try:
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            else:
-                data = {"by_day": {}}
-        except Exception as e:
-            logger.error(f"[talk] 加载失败 gid={group_id}: {e}")
-            data = {"by_day": {}}
-        data.setdefault("by_day", {})
-        return data
-
-    def _save_group_stats(self, group_id: int, stats: dict):
-        """保存某群的统计文件"""
-        try:
-            os.makedirs(self._stats_dir_of(group_id), exist_ok=True)
-            with open(self._stats_file_of(group_id), "w", encoding="utf-8") as f:
-                json.dump(stats, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"[talk] 保存失败 gid={group_id}: {e}")
-
-    def _prune_old_days_inplace(self, stats: dict, keep_days: int):
-        """删除超出保留天数的旧数据"""
-        try:
-            by_day = stats.get("by_day", {})
-            days = sorted(by_day.keys())
-            if len(days) > keep_days:
-                for d in days[:-keep_days]:
-                    by_day.pop(d, None)
-        except Exception as e:
-            logger.error(f"[talk] 清理历史失败: {e}")
-
-    def _today_str(self) -> str:
-        """返回今天的日期字符串 YYYYMMDD"""
-        return time.strftime("%Y%m%d", time.localtime())
-
-    def _bump_talk_today(self, group_id: int, user_id: int):
-        """对指定群今日发言 +1"""
-        stats = self._load_group_stats(group_id)
-        by_day = stats.setdefault("by_day", {})
-        d = self._today_str()
-        day_map = by_day.setdefault(d, {})
-        uid = str(user_id)
-        day_map[uid] = int(day_map.get(uid, 0)) + 1
-        self._prune_old_days_inplace(stats, self.talk_keep_days)
-        self._save_group_stats(group_id, stats)
-
-    def _query_day_counts(self, group_id: int, day_str: str) -> dict[str, int]:
-        """返回某群某天的 {uid: count}"""
-        stats = self._load_group_stats(group_id)
-        return dict(stats.get("by_day", {}).get(day_str, {}))
-
-    def _query_last_n_days_sum(self, group_id: int, n: int) -> dict[str, int]:
-        """返回某群最近 n 天的汇总 {uid: sum}"""
-        stats = self._load_group_stats(group_id)
-        by_day = stats.get("by_day", {})
-        res: dict[str, int] = {}
-        try:
-            today = datetime.fromtimestamp(time.time())
-            for i in range(n):
-                d = (today - timedelta(days=i)).strftime("%Y%m%d")
-                for uid, c in by_day.get(d, {}).items():
-                    res[uid] = res.get(uid, 0) + int(c)
-        except Exception as e:
-            logger.error(f"[talk] 聚合失败 gid={group_id}: {e}")
-        return res
-
-    def _delete_group_talk_data(self, group_id: int):
-        """清空某群的统计数据"""
-        try:
-            d = self._stats_dir_of(group_id)
-            if os.path.isdir(d):
-                shutil.rmtree(d, ignore_errors=True)
-                logger.info(f"[talk] 已清空群 {group_id} 的统计数据")
-        except Exception as e:
-            logger.error(f"[talk] 删除群统计目录失败 gid={group_id}: {e}")
-    # =========================================================
-    # 工具函数：从本地 JSON 恢复（仅名单类）
+    # 工具函数：从本地 JSON 恢复（若存在）—— 仅名单类
     # =========================================================
     def _load_json_data(self):
         try:
@@ -278,9 +178,10 @@ class AutoRecallKeywordPlugin(Star):
             logger.error(f"读取 cesn_data.json 失败：{e}")
 
     # =========================================================
-    # 认证数据：独立读写 + 旧数据迁移
+    # 新增：数据独立读写 + 旧数据迁移
     # =========================================================
     def _load_auth_data(self):
+        # 1) 尝试直接读 auth_data.json
         try:
             with open(self.auth_data_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -292,7 +193,7 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"读取 {self.auth_data_file} 失败：{e}")
 
-        # 尝试旧文件迁移
+        # 2) 不存在则尝试从旧 cesn_data.json 迁移
         try:
             with open("cesn_data.json", "r", encoding="utf-8") as f:
                 old = json.load(f)
@@ -300,7 +201,7 @@ class AutoRecallKeywordPlugin(Star):
             if old_map:
                 self.authority_cert = old_map
                 self.save_auth_data()
-                # 清理旧文件中的 authority_cert
+                # 清理旧文件内的 authority_cert 字段，避免重复
                 try:
                     del old["authority_cert"]
                     with open("cesn_data.json", "w", encoding="utf-8") as f:
@@ -316,7 +217,8 @@ class AutoRecallKeywordPlugin(Star):
             self.save_auth_data()
         except Exception as e:
             logger.error(f"迁移旧认证数据失败：{e}")
-            self.save_auth_data()  # 兜底
+            # 兜底：写一个空文件
+            self.save_auth_data()
 
     def save_auth_data(self):
         data = {"authority_cert": self.authority_cert}
@@ -328,7 +230,7 @@ class AutoRecallKeywordPlugin(Star):
             logger.error(f"保存 {self.auth_data_file} 失败：{e}")
 
     # =========================================================
-    # 工具函数：保存名单类数据
+    # 工具函数：将内存数据保存到本地（名单类）
     # =========================================================
     def save_json_data(self):
         data = {
@@ -337,13 +239,9 @@ class AutoRecallKeywordPlugin(Star):
             'sub_admin_list': list(self.sub_admin_list),
             'whitelist': list(self.whitelist),
         }
-        try:
-            with open('cesn_data.json', 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.info("已保存名单类数据到 cesn_data.json")
-        except Exception as e:
-            logger.error(f"保存 cesn_data.json 失败: {e}")
-
+        with open('cesn_data.json', 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        logger.info("已保存名单类数据到 cesn_data.json")
     async def _safe_call(self, bot, action: str, **params):
         """统一调用 API，失败时只打日志不抛异常"""
         try:
@@ -726,114 +624,45 @@ class AutoRecallKeywordPlugin(Star):
         if pos < len(text):
             segments.append({"type": "text", "data": {"text": text[pos:]}})
         return segments if segments else [{"type": "text", "data": {"text": text}}]
-import base64
-from io import BytesIO
-
-def _render_talk_rank_image(self, title: str, items: list[tuple[str, str, int]]) -> str | None:
-    """
-    渲染排行榜为图片并返回 base64 编码（base64://xxx）。
-    items: [(rank_str, name, count), ...]
-    return: base64://xxx 失败返回 None
-    """
-    if not _PIL_OK:
-        return None
-
-    try:
-        # 字体（Windows/Linux/Mac 不同，这里尝试微软雅黑，失败用默认）
-        try:
-            font = ImageFont.truetype("msyh.ttc", 28)  # 微软雅黑
-        except Exception:
-            font = ImageFont.load_default()
-
-        try:
-            title_font = ImageFont.truetype("msyh.ttc", 36)
-        except Exception:
-            title_font = ImageFont.load_default()
-
-        padding = 20
-        line_height = 50
-        width = 700
-        height = padding * 2 + line_height * (len(items) + 2)
-
-        img = Image.new("RGB", (width, height), (245, 245, 245))
-        draw = ImageDraw.Draw(img)
-
-        # 标题
-        draw.text((padding, padding), title, font=title_font, fill=(30, 30, 30))
-
-        # 表头
-        y = padding + line_height
-        draw.text((padding, y), "排名", font=font, fill=(50, 50, 50))
-        draw.text((padding + 100, y), "昵称", font=font, fill=(50, 50, 50))
-        draw.text((padding + 450, y), "发言数", font=font, fill=(50, 50, 50))
-
-        # 数据行
-        for i, (rank_str, name, cnt) in enumerate(items, start=1):
-            y = padding + line_height * (i + 1)
-            draw.text((padding, y), rank_str, font=font, fill=(20, 20, 20))
-            draw.text((padding + 100, y), str(name), font=font, fill=(20, 20, 20))
-            draw.text((padding + 450, y), str(cnt), font=font, fill=(20, 20, 20))
-
-        # 转成 Base64
-        buf = BytesIO()
-        img.save(buf, format="PNG")
-        b64 = base64.b64encode(buf.getvalue()).decode()
-        return "base64://" + b64
-    except Exception as e:
-        logger.error(f"[排行榜渲染] 失败: {e}")
-        return None
-
-
 
     # =========================================================
-    # 主动退群命令（仅主人）
+    # 主动退群命令
     # =========================================================
     async def handle_owner_leave_group(self, event: AstrMessageEvent, message_str: str) -> bool:
         sender = str(event.get_sender_id())
+        logger.debug(f"[leave-cmd] owner_qq={self.owner_qq!r} sender={sender!r} msg={message_str!r}")
         if not (self.owner_qq and sender == self.owner_qq):
             return False
-
         text = message_str.strip()
-        m = re.match(r"^(?:退群[#＃]?|群号[#＃]?)\s*(\d{4,12})\s*$", text)
+        m = re.match(r"^(?:退群[#＃]|群号[#＃])\s*(\d{4,12})\s*$", text)
         if not m:
+            m = re.match(r"^(?:退群|群号)\s+(\d{4,12})\s*$", text)
+        if not m:
+            logger.debug("[leave-cmd] pattern not matched")
             return False
-
         target_gid = m.group(1)
         cur_gid = event.get_group_id()
-
-        # 提示回执
         try:
             await event.bot.send_group_msg(group_id=int(cur_gid), message=f"群号:{target_gid}\n已退群！！！")
         except Exception as e:
-            logger.error(f"[退群命令] 回执失败：{e}")
-
-        # 在目标群发送告别
+            logger.error(f"[leave-cmd] 回执失败（当前群={cur_gid} 目标群={target_gid}）：{e}")
         try:
             await event.bot.send_group_msg(group_id=int(target_gid), message="宝宝们,有缘再见~")
         except Exception as e:
-            logger.error(f"[退群命令] 给目标群({target_gid})发送告别失败：{e}")
-
-        # 执行退群
+            logger.error(f"[leave-cmd] 给目标群({target_gid})发送告别失败：{e}")
         try:
             try:
                 await event.bot.set_group_leave(group_id=int(target_gid))
             except TypeError:
                 await event.bot.set_group_leave(group_id=int(target_gid), is_dismiss=False)
-            logger.info(f"[退群命令] 已退出群 {target_gid}")
-
-            # === 新增：退群后清理统计数据 ===
-            self._delete_group_talk_data(int(target_gid))
-            logger.info(f"[退群清理] 主人命令退群 {target_gid}，已清理数据。")
-
+            logger.info(f"[leave-cmd] 已退出群 {target_gid}")
         except Exception as e:
-            logger.error(f"[退群命令] 退出群({target_gid})失败：{e}")
+            logger.error(f"[leave-cmd] 退出群({target_gid})失败：{e}")
             try:
                 await event.bot.send_group_msg(group_id=int(cur_gid), message=f"退出群 {target_gid} 失败：{e}")
             except Exception:
                 pass
-
         return True
-
 
     # =========================================================
     # “我要看美女”视频 URL
@@ -1063,51 +892,6 @@ def _render_talk_rank_image(self, title: str, items: list[tuple[str, str, int]])
         if role == "admin":
             return "尊贵的管理"
         return "低贱的群员"
-    # =========================================================
-    # 群减少事件：机器人退群/被踢 → 清理该群统计数据
-    # =========================================================
-    @filter.event_message_type(getattr(EventMessageType, "NOTICE", EventMessageType.GROUP_MESSAGE))
-    async def _on_group_decrease(self, event: AstrMessageEvent):
-        raw = getattr(event.message_obj, "raw_message", {}) or {}
-        if str(raw.get("post_type", "")) != "notice":
-            return
-
-        ntype = str(raw.get("notice_type", ""))
-        if ntype not in {"group_decrease", "group_member_decrease", "member_decrease"}:
-            return
-
-        try:
-            group_id = int(raw["group_id"])
-            user_id = int(raw.get("user_id") or raw.get("member_id") or raw.get("target_id") or 0)
-        except Exception:
-            return
-
-        if not user_id:
-            return
-
-        # 判断是不是机器人自己
-        self_id = await self._get_self_user_id(event)
-        if self_id and str(user_id) == str(self_id):
-            # 机器人退群/被踢，清理该群统计数据
-            self._cleanup_group_data(group_id)
-            logger.info(f"[退群清理] 机器人已退出群 {group_id}，清理完成。")
-
-    def _cleanup_group_data(self, group_id: int):
-        """
-        清理某群的所有数据（发言统计、索引缓存等）。
-        """
-        try:
-            # 删除发言统计
-            self._delete_group_talk_data(group_id)
-
-            # 删除成员索引缓存
-            self._member_index.pop(group_id, None)
-            self._member_index_built_at.pop(group_id, None)
-
-            logger.info(f"[群清理] 群 {group_id} 的数据已清理完成。")
-        except Exception as e:
-            logger.error(f"[群清理] 群 {group_id} 清理失败: {e}")
-
 
     # =========================================================
     # 核心入口：群消息自动处理
@@ -1122,33 +906,24 @@ def _render_talk_rank_image(self, title: str, items: list[tuple[str, str, int]])
         message_str = event.message_str.strip()
         message_id = event.message_obj.message_id
 
-        # ---------- 新增：发言计数（排除机器人自身） ----------
-        try:
-            self_id = await self._get_self_user_id(event)
-        except Exception:
-            self_id = None
-        if not self_id or str(sender_id) != str(self_id):
-            self._bump_talk_today(int(group_id), int(sender_id))
-
         # ---------- 主人主动退群命令 ----------
         handled = await self.handle_owner_leave_group(event, message_str)
         if handled:
-            try:
-                target_gid = re.search(r"(\d{4,12})", message_str).group(1)
-                self._cleanup_group_data(int(target_gid))
-            except Exception as e:
-                logger.error(f"[退群清理] 失败: {e}")
             return
 
-
-
-        # ---------- 新增：我的身份 ----------
+        # ---------- 新增：我的身份（人人可查） ----------
         if message_str == "我的身份":
+            # 群内名称
             name = await self._get_group_display_name(event, int(group_id), int(sender_id))
+            # 角色身份
             role = await self._get_member_role(event, int(group_id), int(sender_id))
             role_cn = self._role_label(role)
+            # 权威认证
             auth = self.authority_cert.get(str(sender_id), "无名小辈")
+            # 时间
             ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+            # 美化输出（卡片风格）
             text = (
                 "👑 我的身份\n"
                 "━━━━━━━━━\n"
@@ -1161,106 +936,61 @@ def _render_talk_rank_image(self, title: str, items: list[tuple[str, str, int]])
                 f"{ts}\n"
                 "━━━━━━━━━"
             )
+
+            try:
+                if hasattr(event, "mark_action"):
+                    event.mark_action("敏感词插件 - 我的身份")
+            except Exception:
+                pass
+
             await self._safe_send_group_msg(event.bot, group_id, text)
             return
-
-        # ---------- 发言日榜 ----------
-        if message_str == "发言日榜":
-            today = self._today_str()
-            counts = self._query_day_counts(int(group_id), today)
-            if not counts:
-                await self._safe_send_group_msg(event.bot, group_id, "今天还没有任何发言记录。")
-                return
-
-            # 取前10
-            top = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:10]
-            items = []
-            for rank, (uid, cnt) in enumerate(top, 1):
-                name = await self._resolve_display_name_anywhere(event, int(group_id), uid)
-                items.append((str(rank), name, cnt))
-
-            img_path = self._render_talk_rank_image("📊 今日发言日榜（前10）", items)
-            if img_path:
-                await event.bot.send_group_msg(
-                    group_id=int(group_id),
-                    message=[{"type": "image", "data": {"file": img_path}}]
-                )
-            else:
-                lines = [f"{rank}. {name}({uid}) - {cnt}条" for rank, (uid, cnt) in enumerate(top, 1)
-                         for name in [await self._resolve_display_name_anywhere(event, int(group_id), uid)]]
-                await self._safe_send_group_msg(event.bot, group_id, "📊 今日发言日榜（前10）\n" + "\n".join(lines))
-            return
-
-        # ---------- 发言周榜 ----------
-        if message_str == "发言周榜":
-            counts = self._query_last_n_days_sum(int(group_id), 7)
-            if not counts:
-                await self._safe_send_group_msg(event.bot, group_id, "最近7天没有任何发言记录。")
-                return
-
-            top = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:10]
-            items = []
-            for rank, (uid, cnt) in enumerate(top, 1):
-                name = await self._resolve_display_name_anywhere(event, int(group_id), uid)
-                items.append((str(rank), name, cnt))
-
-            img_path = self._render_talk_rank_image("📊 最近7天发言周榜（前10）", items)
-            if img_path:
-                await event.bot.send_group_msg(
-                    group_id=int(group_id),
-                    message=[{"type": "image", "data": {"file": img_path}}]
-                )
-            else:
-                lines = [f"{rank}. {name}({uid}) - {cnt}条" for rank, (uid, cnt) in enumerate(top, 1)
-                         for name in [await self._resolve_display_name_anywhere(event, int(group_id), uid)]]
-                await self._safe_send_group_msg(event.bot, group_id, "📊 最近7天发言周榜（前10）\n" + "\n".join(lines))
-            return
-
-        # ---------- 我的发言 ----------
-        if message_str == "我的发言":
-            today = self._today_str()
-            counts = self._query_day_counts(int(group_id), today)
-            cnt = int(counts.get(str(sender_id), 0))
-            name = await self._resolve_display_name_anywhere(event, int(group_id), sender_id)
-
-            img_path = self._render_talk_rank_image("👤 我的发言", [("1", name, cnt)])
-            if img_path:
-                await event.bot.send_group_msg(
-                    group_id=int(group_id),
-                    message=[{"type": "image", "data": {"file": img_path}}]
-                )
-            else:
-                await self._safe_send_group_msg(event.bot, group_id, f"👤 {name}({sender_id})\n今日发言：{cnt} 条")
-            return
-
         # ---------- 我要看美女 ----------
         if "我要看美女" in message_str:
             now = time.time()
             last_video = self.video_last_time.get(group_id, 0)
             if now - last_video < self.video_cooldown:
-                resp = await event.bot.send_group_msg(group_id=int(group_id), message="不发！少🦌行不行！")
-                if isinstance(resp, dict) and "message_id" in resp:
-                    asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=8))
+                try:
+                    resp = await event.bot.send_group_msg(group_id=int(group_id), message="不发！少🦌行不行！")
+                    if isinstance(resp, dict) and "message_id" in resp:
+                        asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=8))
+                except Exception as e:
+                    logger.error(f"发送30秒限制提示失败: {e}")
                 return
+
             last_api = self.beauty_last_time.get(group_id, 0)
             if now - last_api < self.beauty_cooldown:
                 remain = int(self.beauty_cooldown - (now - last_api))
-                resp = await event.bot.send_group_msg(group_id=int(group_id), message=f"别急呀~ 冷却中 {remain}s")
-                if isinstance(resp, dict) and "message_id" in resp:
-                    asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=8))
+                try:
+                    resp = await event.bot.send_group_msg(group_id=int(group_id), message=f"别急呀~ 冷却中 {remain}s")
+                    if isinstance(resp, dict) and "message_id" in resp:
+                        asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=8))
+                except Exception as e:
+                    logger.error(f"发送接口冷却提示失败: {e}")
                 return
+
             video_url = await self._fetch_beauty_video_url()
             if not video_url:
-                await event.bot.send_group_msg(group_id=int(group_id), message="接口开小差了，一会儿再试下~")
+                try:
+                    await event.bot.send_group_msg(group_id=int(group_id), message="接口开小差了，一会儿再试下~")
+                except Exception as e:
+                    logger.error(f"发送接口失败提示异常: {e}")
                 return
+
+            logger.debug(f"[美女接口] final url={video_url}")
+
             try:
                 if video_url.lower().endswith(".m3u8"):
                     await event.bot.send_group_msg(group_id=int(group_id), message=video_url)
                 else:
                     msg_seg = [{"type": "video", "data": {"file": video_url}}]
                     await event.bot.send_group_msg(group_id=int(group_id), message=msg_seg)
-            except Exception:
-                await event.bot.send_group_msg(group_id=int(group_id), message=video_url)
+            except Exception as e:
+                logger.error(f"发送视频段失败，回退为链接: {e}")
+                try:
+                    await event.bot.send_group_msg(group_id=int(group_id), message=video_url)
+                except Exception as e2:
+                    logger.error(f"发送视频链接也失败: {e2}")
             finally:
                 self.video_last_time[group_id] = now
                 self.beauty_last_time[group_id] = now
@@ -1272,21 +1002,27 @@ def _render_talk_rank_image(self, title: str, items: list[tuple[str, str, int]])
         if now_time - last_reply_time >= self.auto_reply_cooldown:
             for key, reply in self.auto_replies.items():
                 if key in message_str:
-                    await event.bot.send_group_msg(group_id=int(group_id), message=self._parse_message_with_faces(reply))
-                    self.auto_reply_last_time[group_id] = now_time
+                    try:
+                        await event.bot.send_group_msg(
+                            group_id=int(group_id),
+                            message=self._parse_message_with_faces(reply)
+                        )
+                        self.auto_reply_last_time[group_id] = now_time
+                    except Exception as e:
+                        logger.error(f"自动回复失败: {e}")
                     break
 
-        # ---------- 查询违规 ----------
+        # ---------- 指令：查询违规 ----------
         if message_str.startswith("查询违规"):
             await self.handle_check_violation(event)
             return
 
-        # ---------- 查共群 ----------
+        # ---------- 指令：查共群 ----------
         if message_str.startswith("查共群"):
             await self.handle_check_common_groups(event)
             return
 
-        # ---------- 群管命令 ----------
+        # ---------- 群管命令分发 ----------
         command_keywords = (
             "禁言", "解禁", "解言", "踢黑", "解黑",
             "踢", "针对", "解针对", "设置管理员", "移除管理员", "撤回",
@@ -1298,13 +1034,18 @@ def _render_talk_rank_image(self, title: str, items: list[tuple[str, str, int]])
             "清空白名单",
         )
         if message_str.startswith(command_keywords):
+            # 认证/移除认证：仅主人，优先分流
             if message_str.startswith("认证") or message_str.startswith("移除认证"):
                 await self.handle_certify(event)
                 return
+
             if not await self._is_operator(event, int(group_id), int(sender_id)):
-                resp = await event.bot.send_group_msg(group_id=int(group_id), message="你配指挥我吗？")
-                if isinstance(resp, dict) and "message_id" in resp:
-                    asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=10))
+                try:
+                    resp = await event.bot.send_group_msg(group_id=int(group_id), message="你配指挥我吗？")
+                    if isinstance(resp, dict) and "message_id" in resp:
+                        asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=10))
+                except Exception as e:
+                    logger.error(f"发送无权限提示失败: {e}")
                 return
             await self.handle_commands(event)
             return
@@ -1314,8 +1055,8 @@ def _render_talk_rank_image(self, title: str, items: list[tuple[str, str, int]])
             rec = await self.get_member_record(event, int(group_id), int(sender_id))
             if self._role_of(rec) in ("owner", "admin"):
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"获取用户 {sender_id} 群身份失败(索引): {e}")
 
         # ---------- 黑名单：发言触发兜底（只在当前群处理+撤回） ----------
         if str(sender_id) in self.kick_black_list:
@@ -2017,4 +1758,4 @@ def _render_talk_rank_image(self, title: str, items: list[tuple[str, str, int]])
     # 插件卸载钩子
     # =========================================================
     async def terminate(self):
-        logger.info("AutoRecallKeywordPlugin 插件已被卸载。")
+        logger.info("AutoRecallKeywordPlugin 插件已被卸载。") 
