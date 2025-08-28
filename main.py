@@ -383,97 +383,6 @@ class AutoRecallKeywordPlugin(Star):
 
         self._save_stats_data()
     # =========================================================
-    # 新增：绘图函数（移除自定义字体，强制使用 Pillow 内置默认字体）
-    # =========================================================
-def _pick_font(self, size=32):
-    """返回一个可用的 PIL ImageFont 对象；按 顺序 尝试：
-    1) 配置中的 self.img_font_path
-    2) Linux: NotoSansCJK
-    3) Windows: SimHei
-    4) Pillow 内置默认字体
-    """
-    # 1) 配置字体（如果存在）
-    try:
-        if getattr(self, "img_font_path", None):
-            # 如果提供了绝对路径或相对路径，Pillow 不要求必须先判断存在
-            return ImageFont.truetype(self.img_font_path, size)
-    except Exception:
-        pass
-
-    # 2) Linux 常见中文字体
-    try:
-        return ImageFont.truetype("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", size)
-    except Exception:
-        pass
-
-    # 3) Windows 常见中文字体
-    try:
-        return ImageFont.truetype("C:/Windows/Fonts/simhei.ttf", size)
-    except Exception:
-        pass
-
-    # 4) 兜底：内置默认字体（英文/基本符号）
-    return ImageFont.load_default()
-
-    def _render_rank_image(self, title: str, rows: list[tuple[str, int]]) -> str:
-        """生成排行榜图片，返回文件路径"""
-        if not PIL_OK:
-            return None
-        _ensure_dir(self.img_save_dir)
-
-        width = self.img_width
-        height = self.img_padding*2 + self.img_row_height*(len(rows)+1)
-        img = Image.new("RGB", (width, height), (255,255,255))
-        draw = ImageDraw.Draw(img)
-
-        font_title = self._pick_font(32)   # 标题字体（默认字体）
-        font_row   = self._pick_font(24)   # 每行字体（默认字体）
-
-        # 标题
-        draw.text((self.img_padding, self.img_padding), title, fill=(0,0,0), font=font_title)
-
-        # 行数据
-        for idx,(name,cnt) in enumerate(rows, start=1):
-            color = self.img_line_palette[(idx-1)%len(self.img_line_palette)]
-            text = f"{idx}. {name} 今日已发送 {cnt} 条消息"
-            y = self.img_padding + self.img_row_height*idx
-            draw.text((self.img_padding, y), text, fill=color, font=font_row)
-
-        fn = os.path.join(self.img_save_dir, f"rank_{int(time.time())}.png")
-        img.save(fn)
-        return fn
-
-    def _render_my_today_card(self, name:str, uid:str, cnt:int) -> str:
-        """生成我的发言卡片，返回文件路径"""
-        if not PIL_OK:
-            return None
-        _ensure_dir(self.img_save_dir)
-
-        width = self.img_width
-        height = 320
-        img = Image.new("RGB", (width, height), (255,255,255))
-        draw = ImageDraw.Draw(img)
-
-        font_big = self._pick_font(28)
-        font_mid = self._pick_font(24)
-
-        lines = [
-            f"用户：{name}",
-            f"QQ：{uid}",
-            f"今日发言：{cnt} 条",
-            f"查询时间：{_now_local().strftime('%Y-%m-%d %H:%M:%S')}"
-        ]
-        y = self.img_padding
-        for i, line in enumerate(lines):
-            color = self.img_line_palette[i%len(self.img_line_palette)]
-            draw.text((self.img_padding, y), line, fill=color, font=font_mid)
-            y += 50
-
-        fn = os.path.join(self.img_save_dir, f"my_{uid}_{int(time.time())}.png")
-        img.save(fn)
-        return fn
-
-    # =========================================================
     # 工具函数：将内存数据保存到本地（名单类）
     # =========================================================
     def save_json_data(self):
@@ -922,113 +831,193 @@ def _pick_font(self, size=32):
                             logger.error(f"刷屏批量撤回失败 mid={mid}: {e}")
                 self.user_message_times[key].clear()
                 self.user_message_ids[key].clear()
-def _build_rank_html(self, title: str, rows: list[tuple[str, int]]) -> str:
-    # 简洁的自适应表格，深色标题+条纹行
-    items = "\n".join(
-        f"<tr><td>{i+1}</td><td>{name}</td><td>{cnt}</td></tr>"
-        for i,(name,cnt) in enumerate(rows)
-    )
-    css = """
-    <style>
-    @font-face{font-family:'NotoSC';src:local('Noto Sans CJK SC'),local('Noto Sans SC');}
-    *{margin:0;padding:0;box-sizing:border-box;}
-    body{font-family:'NotoSC','Microsoft YaHei',Arial; background:#f7f7f9; padding:24px;}
-    .card{width:900px; background:#fff; border-radius:16px; box-shadow:0 6px 18px rgba(0,0,0,.08); padding:24px;}
-    .title{font-size:22px; font-weight:700; margin-bottom:14px;}
-    table{width:100%; border-collapse:collapse; overflow:hidden; border-radius:12px;}
-    thead tr{background:#111827; color:#fff;}
-    th,td{padding:12px 14px; text-align:left; font-size:16px;}
-    tbody tr:nth-child(odd){background:#fafafa;}
-    tbody tr:nth-child(even){background:#f0f0f3;}
-    td:nth-child(1){width:72px; font-weight:700;}
-    td:nth-child(3){text-align:right; width:160px;}
-    .foot{margin-top:10px; color:#6b7280; font-size:12px;}
-    </style>
-    """
-    now = _now_local().strftime("%Y-%m-%d %H:%M:%S")
-    html = f"""<!doctype html><html><head><meta charset="utf-8">{css}</head>
-    <body><div class="card">
-      <div class="title">{title}</div>
-      <table>
-        <thead><tr><th>#</th><th>成员</th><th>消息数</th></tr></thead>
-        <tbody>{items}</tbody>
-      </table>
-      <div class="foot">生成时间：{now}</div>
-    </div></body></html>"""
-    return html
 
-def _build_mycard_html(self, name: str, uid: str, cnt: int) -> str:
-    css = """
-    <style>
-    body{margin:0;padding:24px;background:#f7f7f9;font-family:'Noto Sans CJK SC','Microsoft YaHei',Arial}
-    .card{width:900px;background:#fff;border-radius:16px;box-shadow:0 6px 18px rgba(0,0,0,.08);padding:28px}
-    .title{font-size:22px;font-weight:700;margin-bottom:18px}
-    .row{display:flex;gap:12px;margin:8px 0}
-    .key{width:120px;color:#6b7280}
-    .val{font-weight:600}
-    .foot{margin-top:12px;color:#6b7280;font-size:12px}
-    </style>
-    """
-    now = _now_local().strftime("%Y-%m-%d %H:%M:%S")
-    html = f"""<!doctype html><html><head><meta charset="utf-8">{css}</head>
-    <body><div class="card">
-      <div class="title">今日我的发言</div>
-      <div class="row"><div class="key">用户</div><div class="val">{name}</div></div>
-      <div class="row"><div class="key">QQ</div><div class="val">{uid}</div></div>
-      <div class="row"><div class="key">今日发言</div><div class="val">{cnt} 条</div></div>
-      <div class="foot">生成时间：{now}</div>
-    </div></body></html>"""
-    return html
-def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
-    if not self.html_render_enable:
+
+
+    # =========================================================
+    # 绘图 & HTML 渲染（不依赖自带字体；按系统字体/内置字体兜底）
+    # =========================================================
+    def _pick_font(self, size=32):
+        """返回一个可用的 PIL ImageFont 对象；尝试系统字体，失败退回 Pillow 内置默认字体。"""
+        # 自定义字体（如果配置里给了就用，没有也没关系）
+        try:
+            if getattr(self, "img_font_path", None):
+                return ImageFont.truetype(self.img_font_path, size)
+        except Exception:
+            pass
+        # Linux 常见中文
+        try:
+            return ImageFont.truetype("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", size)
+        except Exception:
+            pass
+        # Windows 常见中文
+        try:
+            return ImageFont.truetype("C:/Windows/Fonts/simhei.ttf", size)
+        except Exception:
+            pass
+        # 兜底
+        return ImageFont.load_default()
+
+    def _render_rank_image(self, title: str, rows: list[tuple[str, int]]) -> str | None:
+        """生成排行榜图片（Pillow），返回文件路径；失败返回 None。"""
+        if not PIL_OK:
+            return None
+        _ensure_dir(self.img_save_dir)
+
+        width = self.img_width
+        height = self.img_padding*2 + self.img_row_height*(len(rows)+1)
+        img = Image.new("RGB", (width, height), (255, 255, 255))
+        draw = ImageDraw.Draw(img)
+
+        font_title = self._pick_font(32)
+        font_row   = self._pick_font(24)
+
+        # 标题
+        draw.text((self.img_padding, self.img_padding), title, fill=(0, 0, 0), font=font_title)
+
+        # 行数据
+        for idx, (name, cnt) in enumerate(rows, start=1):
+            color = self.img_line_palette[(idx-1) % len(self.img_line_palette)]
+            text = f"{idx}. {name} 今日已发送 {cnt} 条消息"
+            y = self.img_padding + self.img_row_height*idx
+            draw.text((self.img_padding, y), text, fill=color, font=font_row)
+
+        fn = os.path.join(self.img_save_dir, f"rank_{int(time.time())}.png")
+        img.save(fn)
+        return fn
+
+    def _render_my_today_card(self, name: str, uid: str, cnt: int) -> str | None:
+        """生成‘我的发言’卡片（Pillow），返回文件路径；失败返回 None。"""
+        if not PIL_OK:
+            return None
+        _ensure_dir(self.img_save_dir)
+
+        width = self.img_width
+        height = 320
+        img = Image.new("RGB", (width, height), (255, 255, 255))
+        draw = ImageDraw.Draw(img)
+
+        font_mid = self._pick_font(24)
+
+        lines = [
+            f"用户：{name}",
+            f"QQ：{uid}",
+            f"今日发言：{cnt} 条",
+            f"查询时间：{_now_local().strftime('%Y-%m-%d %H:%M:%S')}"
+        ]
+        y = self.img_padding
+        for i, line in enumerate(lines):
+            color = self.img_line_palette[i % len(self.img_line_palette)]
+            draw.text((self.img_padding, y), line, fill=color, font=font_mid)
+            y += 50
+
+        fn = os.path.join(self.img_save_dir, f"my_{uid}_{int(time.time())}.png")
+        img.save(fn)
+        return fn
+
+    def _build_rank_html(self, title: str, rows: list[tuple[str, int]]) -> str:
+        items = "\n".join(
+            f"<tr><td>{i+1}</td><td>{name}</td><td>{cnt}</td></tr>"
+            for i, (name, cnt) in enumerate(rows)
+        )
+        css = """
+        <style>
+        @font-face{font-family:'NotoSC';src:local('Noto Sans CJK SC'),local('Noto Sans SC');}
+        *{margin:0;padding:0;box-sizing:border-box;}
+        body{font-family:'NotoSC','Microsoft YaHei',Arial; background:#f7f7f9; padding:24px;}
+        .card{width:900px; background:#fff; border-radius:16px; box-shadow:0 6px 18px rgba(0,0,0,.08); padding:24px;}
+        .title{font-size:22px; font-weight:700; margin-bottom:14px;}
+        table{width:100%; border-collapse:collapse; overflow:hidden; border-radius:12px;}
+        thead tr{background:#111827; color:#fff;}
+        th,td{padding:12px 14px; text-align:left; font-size:16px;}
+        tbody tr:nth-child(odd){background:#fafafa;}
+        tbody tr:nth-child(even){background:#f0f0f3;}
+        td:nth-child(1){width:72px; font-weight:700;}
+        td:nth-child(3){text-align:right; width:160px;}
+        .foot{margin-top:10px; color:#6b7280; font-size:12px;}
+        </style>
+        """
+        now = _now_local().strftime("%Y-%m-%d %H:%M:%S")
+        html = f"""<!doctype html><html><head><meta charset="utf-8">{css}</head>
+        <body><div class="card">
+          <div class="title">{title}</div>
+          <table>
+            <thead><tr><th>#</th><th>成员</th><th>消息数</th></tr></thead>
+            <tbody>{items}</tbody>
+          </table>
+          <div class="foot">生成时间：{now}</div>
+        </div></body></html>"""
+        return html
+
+    def _build_mycard_html(self, name: str, uid: str, cnt: int) -> str:
+        css = """
+        <style>
+        body{margin:0;padding:24px;background:#f7f7f9;font-family:'Noto Sans CJK SC','Microsoft YaHei',Arial}
+        .card{width:900px;background:#fff;border-radius:16px;box-shadow:0 6px 18px rgba(0,0,0,.08);padding:28px}
+        .title{font-size:22px;font-weight:700;margin-bottom:18px}
+        .row{display:flex;gap:12px;margin:8px 0}
+        .key{width:120px;color:#6b7280}
+        .val{font-weight:600}
+        .foot{margin-top:12px;color:#6b7280;font-size:12px}
+        </style>
+        """
+        now = _now_local().strftime("%Y-%m-%d %H:%M:%S")
+        html = f"""<!doctype html><html><head><meta charset="utf-8">{css}</head>
+        <body><div class="card">
+          <div class="title">今日我的发言</div>
+          <div class="row"><div class="key">用户</div><div class="val">{name}</div></div>
+          <div class="row"><div class="key">QQ</div><div class="val">{uid}</div></div>
+          <div class="row"><div class="key">今日发言</div><div class="val">{cnt} 条</div></div>
+          <div class="foot">生成时间：{now}</div>
+        </div></body></html>"""
+        return html
+
+    def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
+        if not self.html_render_enable:
+            return None
+        _ensure_dir(self.img_save_dir)
+        out = os.path.join(self.img_save_dir, f"{out_prefix}_{int(time.time())}.png")
+
+        # 优先 imgkit + wkhtmltoimage
+        if IMGKIT_OK:
+            options = {
+                "format": "png",
+                "encoding": "utf-8",
+                "load-error-handling": "ignore",
+                "load-media-error-handling": "ignore",
+                "width": str(self.img_width),
+                "quality": "100",
+            }
+            if self.wkhtmltoimage_path:
+                try:
+                    cfg = imgkit.config(wkhtmltoimage=self.wkhtmltoimage_path)
+                except Exception:
+                    cfg = None
+            else:
+                try:
+                    cfg = imgkit.config()  # 系统 PATH
+                except Exception:
+                    cfg = None
+            try:
+                if cfg:
+                    imgkit.from_string(html, out, options=options, config=cfg)
+                    return out if os.path.exists(out) else None
+            except Exception as e:
+                logger.error(f"[HTML] imgkit 渲染失败: {e}")
+
+        # 退回 html2image（Chromium）
+        if H2I_OK:
+            try:
+                hti = Html2Image(output_path=self.img_save_dir)
+                fname = f"{out_prefix}_{int(time.time())}.png"
+                hti.screenshot(html_str=html, save_as=fname, size=(self.img_width, None))
+                path = os.path.join(self.img_save_dir, fname)
+                return path if os.path.exists(path) else None
+            except Exception as e:
+                logger.error(f"[HTML] html2image 渲染失败: {e}")
+
         return None
-    _ensure_dir(self.img_save_dir)
-    out = os.path.join(self.img_save_dir, f"{out_prefix}_{int(time.time())}.png")
 
-    # 优先 imgkit + wkhtmltoimage
-    if IMGKIT_OK:
-        options = {
-            "format": "png",
-            "encoding": "utf-8",
-            "load-error-handling": "ignore",
-            "load-media-error-handling": "ignore",
-            "width": str(self.img_width),
-            "quality": "100",
-        }
-        if self.wkhtmltoimage_path:
-            try:
-                cfg = imgkit.config(wkhtmltoimage=self.wkhtmltoimage_path)
-            except Exception:
-                cfg = None
-        else:
-            try:
-                cfg = imgkit.config()  # 走系统 PATH
-            except Exception:
-                cfg = None
-        try:
-            if cfg:
-                imgkit.from_string(html, out, options=options, config=cfg)
-                return out if os.path.exists(out) else None
-        except Exception as e:
-            logger.error(f"[HTML] imgkit 渲染失败: {e}")
-
-    # 退回 html2image（基于 Chromium）
-    if H2I_OK:
-        try:
-            hti = Html2Image(output_path=self.img_save_dir)
-            # 注意：html2image 生成文件名不能包含路径
-            fname = f"{out_prefix}_{int(time.time())}.png"
-            hti.screenshot(html_str=html, save_as=fname, size=(self.img_width, None))
-            path = os.path.join(self.img_save_dir, fname)
-            return path if os.path.exists(path) else None
-        except Exception as e:
-            logger.error(f"[HTML] html2image 渲染失败: {e}")
-
-    return None
-                
-    # =========================================================
-    # 新增：指令实现（改为 Base64 发送图片）
-    # =========================================================
     def _to_cq_image_base64(self, path: str) -> str | None:
         try:
             with open(path, "rb") as f:
@@ -1038,81 +1027,77 @@ def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
             logger.error(f"[Image] Base64 转换失败 {path}: {e}")
             return None
 
-async def _handle_rank(self, event: AstrMessageEvent, mode: str = "day"):
-    gid = str(event.get_group_id())
-    day = _today_str()
-    rows = []
-    if mode == "day":
-        data = self.stats_data.get(day, {}).get(gid, {})
-        rows = sorted(data.items(), key=lambda x: x[1], reverse=True)[:self.stats_top_n]
-        title = f"{day} 今日发言榜"
-    else:  # week
-        days = _week_dates(_now_local(), 7)
-        agg = {}
-        for d in days:
-            gmap = self.stats_data.get(d, {}).get(gid, {})
-            for uid, cnt in gmap.items():
-                agg[uid] = agg.get(uid, 0) + cnt
-        rows = sorted(agg.items(), key=lambda x: x[1], reverse=True)[:self.stats_top_n]
-        title = f"{days[0]} ~ {days[-1]} 一周发言榜"
+    # =========================================================
+    # 发言榜/个人统计指令（被 auto_recall 调用）
+    # =========================================================
+    async def _handle_rank(self, event: AstrMessageEvent, mode: str = "day"):
+        gid = str(event.get_group_id())
+        day = _today_str()
+        rows = []
+        if mode == "day":
+            data = self.stats_data.get(day, {}).get(gid, {})
+            rows = sorted(data.items(), key=lambda x: x[1], reverse=True)[:self.stats_top_n]
+            title = f"{day} 今日发言榜"
+        else:  # week
+            days = _week_dates(_now_local(), 7)
+            agg = {}
+            for d in days:
+                gmap = self.stats_data.get(d, {}).get(gid, {})
+                for uid, cnt in gmap.items():
+                    agg[uid] = agg.get(uid, 0) + cnt
+            rows = sorted(agg.items(), key=lambda x: x[1], reverse=True)[:self.stats_top_n]
+            title = f"{days[0]} ~ {days[-1]} 一周发言榜"
 
-    if not rows:
-        await event.bot.send_group_msg(group_id=int(gid), message="暂无统计数据")
-        return
+        if not rows:
+            await event.bot.send_group_msg(group_id=int(gid), message="暂无统计数据")
+            return
 
-    # 转换 uid->name
-    coros = [self._resolve_display_name_anywhere(event, int(gid), uid) for uid, _ in rows]
-    names = await asyncio.gather(*coros, return_exceptions=True)
-    rows_named = []
-    for (uid, cnt), nm in zip(rows, names):
-        nm = nm if isinstance(nm, str) else str(uid)
-        rows_named.append((nm, cnt))
+        # 转换 uid->name
+        coros = [self._resolve_display_name_anywhere(event, int(gid), uid) for uid, _ in rows]
+        names = await asyncio.gather(*coros, return_exceptions=True)
+        rows_named = []
+        for (uid, cnt), nm in zip(rows, names):
+            nm = nm if isinstance(nm, str) else str(uid)
+            rows_named.append((nm, cnt))
 
-    # 优先 HTML 渲染 → 失败回退 Pillow
-    html = self._build_rank_html(title, rows_named)
-    fn = self._html_to_image(html, out_prefix="rank") or self._render_rank_image(title, rows_named)
+        html = self._build_rank_html(title, rows_named)
+        fn = self._html_to_image(html, out_prefix="rank") or self._render_rank_image(title, rows_named)
 
-    if fn:
-        cq_file = self._to_cq_image_base64(fn)
-        if cq_file:
-            await event.bot.send_group_msg(
-                group_id=int(gid),
-                message=[{"type": "image", "data": {"file": cq_file}}]
-            )
+        if fn:
+            cq_file = self._to_cq_image_base64(fn)
+            if cq_file:
+                await event.bot.send_group_msg(
+                    group_id=int(gid),
+                    message=[{"type": "image", "data": {"file": cq_file}}]
+                )
+            else:
+                await event.bot.send_group_msg(group_id=int(gid), message="生成图片失败")
         else:
-            await event.bot.send_group_msg(group_id=int(gid), message="生成图片失败")
-    else:
-        # 最兜底：纯文本
-        text = title + "\n" + "\n".join(
-            [f"{i+1}. {nm} {cnt}" for i, (nm, cnt) in enumerate(rows_named)]
-        )
-        await event.bot.send_group_msg(group_id=int(gid), message=text)
-async def _handle_my_stats(self, event: AstrMessageEvent):
-    gid = str(event.get_group_id())
-    uid = str(event.get_sender_id())
-    day = _today_str()
-    cnt = self.stats_data.get(day, {}).get(gid, {}).get(uid, 0)
-    name = await self._resolve_display_name_anywhere(event, int(gid), uid)
+            text = title + "\n" + "\n".join([f"{i+1}. {nm} {cnt}" for i, (nm, cnt) in enumerate(rows_named)])
+            await event.bot.send_group_msg(group_id=int(gid), message=text)
 
-    # 优先 HTML 渲染 → 失败回退 Pillow
-    html = self._build_mycard_html(name, uid, cnt)
-    fn = self._html_to_image(html, out_prefix="my") or self._render_my_today_card(name, uid, cnt)
+    async def _handle_my_stats(self, event: AstrMessageEvent):
+        gid = str(event.get_group_id())
+        uid = str(event.get_sender_id())
+        day = _today_str()
+        cnt = self.stats_data.get(day, {}).get(gid, {}).get(uid, 0)
+        name = await self._resolve_display_name_anywhere(event, int(gid), uid)
 
-    if fn:
-        cq_file = self._to_cq_image_base64(fn)
-        if cq_file:
-            await event.bot.send_group_msg(
-                group_id=int(gid),
-                message=[{"type": "image", "data": {"file": cq_file}}]
-            )
+        html = self._build_mycard_html(name, uid, cnt)
+        fn = self._html_to_image(html, out_prefix="my") or self._render_my_today_card(name, uid, cnt)
+
+        if fn:
+            cq_file = self._to_cq_image_base64(fn)
+            if cq_file:
+                await event.bot.send_group_msg(
+                    group_id=int(gid),
+                    message=[{"type": "image", "data": {"file": cq_file}}]
+                )
+            else:
+                await event.bot.send_group_msg(group_id=int(gid), message="生成图片失败")
         else:
-            await event.bot.send_group_msg(group_id=int(gid), message="生成图片失败")
-    else:
-        # 最兜底：纯文本
-        await event.bot.send_group_msg(
-            group_id=int(gid),
-            message=f"{name} 今日已发送 {cnt} 条消息"
-        )
+            await event.bot.send_group_msg(group_id=int(gid), message=f"{name} 今日已发送 {cnt} 条消息")
+
 
     # =========================================================
     # 娱乐功能：封杀倒计时（跳着撤回）+ 最终尝试禁言60秒
