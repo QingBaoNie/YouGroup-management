@@ -861,11 +861,16 @@ class AutoRecallKeywordPlugin(Star):
                 self.user_message_times[key].clear()
                 self.user_message_ids[key].clear()
     # =========================================================
-    # 新增：指令实现（修复图片路径 -> file:/// 绝对路径）
+    # 新增：指令实现（改为 Base64 发送图片）
     # =========================================================
-    def _to_cq_image_file(self, path: str) -> str:
-        abs_path = os.path.abspath(path)  # 转绝对路径
-        return "file:///" + abs_path.replace("\\", "/")  # Windows 路径转 /，Linux 保持正常
+    def _to_cq_image_base64(self, path: str) -> str | None:
+        try:
+            with open(path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            return "base64://" + b64
+        except Exception as e:
+            logger.error(f"[Image] Base64 转换失败 {path}: {e}")
+            return None
 
     async def _handle_rank(self, event: AstrMessageEvent, mode: str = "day"):
         gid = str(event.get_group_id())
@@ -899,11 +904,14 @@ class AutoRecallKeywordPlugin(Star):
 
         fn = self._render_rank_image(title, rows_named)
         if fn:
-            cq_file = self._to_cq_image_file(fn)
-            await event.bot.send_group_msg(
-                group_id=int(gid),
-                message=[{"type": "image", "data": {"file": cq_file}}]
-            )
+            cq_file = self._to_cq_image_base64(fn)
+            if cq_file:
+                await event.bot.send_group_msg(
+                    group_id=int(gid),
+                    message=[{"type": "image", "data": {"file": cq_file}}]
+                )
+            else:
+                await event.bot.send_group_msg(group_id=int(gid), message="生成图片失败")
         else:
             text = title + "\n" + "\n".join(
                 [f"{i+1}. {nm} {cnt}" for i, (nm, cnt) in enumerate(rows_named)]
@@ -918,16 +926,20 @@ class AutoRecallKeywordPlugin(Star):
         name = await self._resolve_display_name_anywhere(event, int(gid), uid)
         fn = self._render_my_today_card(name, uid, cnt)
         if fn:
-            cq_file = self._to_cq_image_file(fn)
-            await event.bot.send_group_msg(
-                group_id=int(gid),
-                message=[{"type": "image", "data": {"file": cq_file}}]
-            )
+            cq_file = self._to_cq_image_base64(fn)
+            if cq_file:
+                await event.bot.send_group_msg(
+                    group_id=int(gid),
+                    message=[{"type": "image", "data": {"file": cq_file}}]
+                )
+            else:
+                await event.bot.send_group_msg(group_id=int(gid), message="生成图片失败")
         else:
             await event.bot.send_group_msg(
                 group_id=int(gid),
                 message=f"{name} 今日已发送 {cnt} 条消息"
             )
+
 
     # =========================================================
     # 娱乐功能：封杀倒计时（跳着撤回）+ 最终尝试禁言60秒
