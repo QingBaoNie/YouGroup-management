@@ -3,62 +3,14 @@ import json
 import re
 import urllib.parse
 import asyncio
-import base64
-import os
-from datetime import datetime, timedelta, timezone
 from collections import defaultdict, deque
+
 from astrbot import logger
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import filter
 from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
-import shutil  # 用于 which 探测可执行文件路径
-# HTML 渲染依赖（任选其一可用）
-try:
-    import imgkit
-    IMGKIT_OK = True
-except Exception:
-    IMGKIT_OK = False
 
-try:
-    from html2image import Html2Image
-    H2I_OK = True
-except Exception:
-    H2I_OK = False
-
-# PIL 可选依赖（用于榜单/卡片图片）
-try:
-    from PIL import Image, ImageDraw, ImageFont
-    PIL_OK = True
-except Exception:
-    PIL_OK = False
-    logger.error("未检测到 Pillow，无法生成发言榜单/个人卡片图片，请安装 pillow")
-
-# ==== 新增：本地时区（中国大陆一般 UTC+8；如你部署在其他时区可改）====
-LOCAL_TZ = timezone(timedelta(hours=8))
-
-def _now_local():
-    return datetime.now(tz=LOCAL_TZ)
-
-def _today_str(dt: datetime | None = None) -> str:
-    dt = dt or _now_local()
-    return dt.strftime("%Y-%m-%d")
-
-def _week_dates(end_dt: datetime | None = None, days: int = 7) -> list[str]:
-    """返回最近 days 天的日期字符串（包含 end_dt 当天），格式 YYYY-MM-DD。"""
-    end_dt = end_dt or _now_local()
-    res = []
-    for i in range(days):
-        d = (end_dt - timedelta(days=i)).strftime("%Y-%m-%d")
-        res.append(d)
-    res.reverse()
-    return res
-
-def _ensure_dir(path: str):
-    try:
-        os.makedirs(path, exist_ok=True)
-    except Exception as e:
-        logger.error(f"[Image] 创建目录失败: {path} | {e}")
 # 新增：异步 HTTP 请求
 try:
     import aiohttp
@@ -119,31 +71,6 @@ class AutoRecallKeywordPlugin(Star):
         # —— 新增：独立文件
         self.auth_data_file = "auth_data.json"
 
-        # ==== 新增：图片渲染配置（可被配置文件 image_config 覆盖）====
-        self.img_font_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"   # 第三方/Google 字体
-        self.img_save_dir  = "cache"                          # 缓存目录
-        self.img_width     = 900
-        self.img_row_height= 64
-        self.img_padding   = 32
-        self.img_line_palette = [  # 每行一个颜色（RGB）
-            (66,133,244),(234,67,53),(251,188,5),(52,168,83),(171,71,188),
-            (0,172,193),(255,112,67),(158,157,36),(121,85,72),(85,139,47)
-        ]
-
-        # ==== 新增：HTML 渲染配置（用于 HTML→图片）====
-        # 注意：这里只放默认值；真正读取配置放到 initialize() 里
-        self.html_render_enable = True          # True 则优先使用 HTML 渲染
-        self.html_renderer      = "auto"        # auto | imgkit | html2image
-        self.wkhtmltoimage_path = ""            # 指定 wkhtmltoimage 路径；留空自动探测
-
-        # ==== 新增：统计配置（stats_config）====
-        self.stats_top_n        = 10      # 榜单前 N
-        self.stats_retention    = 120     # 日桶保留天数
-        self.stats_count_recall = True    # 是否统计被撤回消息（如不想计入，改 False）
-
-        # ==== 新增：统计数据（持久化到 json）====
-        self.stats_file = "stats_data.json"
-        self.stats_data = {}  # { "2025-08-28": { "group_id": { "user_id": count } } }
     # =========================================================
     # 初始化配置（从外部 config 注入、解析开关、打印日志）
     # =========================================================
@@ -217,46 +144,6 @@ class AutoRecallKeywordPlugin(Star):
         self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
         self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
 
-        # ==== 新增：image_config / stats_config 从配置读取 ====
-        img_cfg = config_data.get("image_config", {})
-        self.img_font_path = img_cfg.get("font_path", self.img_font_path)
-        self.img_save_dir  = img_cfg.get("save_dir", self.img_save_dir)
-        self.img_width     = int(img_cfg.get("width", self.img_width))
-        self.img_row_height= int(img_cfg.get("row_height", self.img_row_height))
-        self.img_padding   = int(img_cfg.get("padding", self.img_padding))
-        pal = img_cfg.get("line_palette", None)
-        if pal:
-            parsed = []
-            for s in pal:
-                try:
-                    r, g, b = map(int, s.split(","))
-                    parsed.append((r, g, b))
-                except Exception:
-                    continue
-            if parsed:
-                self.img_line_palette = parsed
-
-        stats_cfg = config_data.get("stats_config", {})
-        self.stats_top_n        = int(stats_cfg.get("top_n", self.stats_top_n))
-        self.stats_retention    = int(stats_cfg.get("retention_days", self.stats_retention))
-        self.stats_count_recall = bool(stats_cfg.get("count_recalled", self.stats_count_recall))
-
-        _ensure_dir(self.img_save_dir)
-        self._load_stats_data()
-
-        # ==== 读取 html_config 并自动探测 wkhtmltoimage ====
-        html_cfg = config_data.get("html_config", {})
-        self.html_render_enable = bool(html_cfg.get("enable", self.html_render_enable))
-        self.html_renderer      = str(html_cfg.get("renderer", self.html_renderer)).lower()
-        self.wkhtmltoimage_path = str(html_cfg.get("wkhtmltoimage_path", self.wkhtmltoimage_path))
-
-        # 自动探测（当 renderer 需要且未显式配置路径）
-        if self.html_renderer in ("auto", "imgkit"):
-            if not self.wkhtmltoimage_path:
-                self.wkhtmltoimage_path = shutil.which("wkhtmltoimage") or ""
-            if not self.wkhtmltoimage_path and self.html_renderer == "imgkit":
-                logger.error("未找到 wkhtmltoimage，可改用 html2image 或在 html_config.wkhtmltoimage_path 指定路径")
-
         # --- 启动日志 ---
         logger.info(f"主人QQ: {self.owner_qq or '(未配置)'}")
         logger.info(f"敏感词列表: {self.bad_words}")
@@ -268,7 +155,6 @@ class AutoRecallKeywordPlugin(Star):
         logger.info(f"入群邀请: auto_accept_owner_invite={self.auto_accept_owner_invite}, reject_non_owner_invite={self.reject_non_owner_invite}")
         logger.info(f"踢/踢黑后撤回最近条数: {self.recall_on_kick_count}")
         logger.info(f"权威条目: {len(self.authority_cert)}")
-        logger.info(f"HTML 渲染: enable={self.html_render_enable}, renderer={self.html_renderer}, wkhtmltoimage={self.wkhtmltoimage_path or '(未设置)'}")
 
     # =========================================================
     # 工具函数：从本地 JSON 恢复（若存在）—— 仅名单类
@@ -287,7 +173,6 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"读取 cesn_data.json 失败：{e}")
 
-    
     # =========================================================
     # 新增：数据独立读写 + 旧数据迁移
     # =========================================================
@@ -339,65 +224,20 @@ class AutoRecallKeywordPlugin(Star):
             logger.info(f"已保存认证数据到 {self.auth_data_file}")
         except Exception as e:
             logger.error(f"保存 {self.auth_data_file} 失败：{e}")
-    # =========================================================
-    # 新增：统计数据读写
-    # =========================================================
-    def _load_stats_data(self):
-        try:
-            with open(self.stats_file, "r", encoding="utf-8") as f:
-                self.stats_data = json.load(f)
-            logger.info(f"已加载统计数据 {self.stats_file}")
-        except FileNotFoundError:
-            self.stats_data = {}
-        except Exception as e:
-            logger.error(f"加载统计数据失败: {e}")
-            self.stats_data = {}
 
-    def _save_stats_data(self):
-        try:
-            with open(self.stats_file, "w", encoding="utf-8") as f:
-                json.dump(self.stats_data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"保存统计数据失败: {e}")
-    # =========================================================
-    # 新增：发言计数
-    # =========================================================
-    def _bump_stats(self, group_id: int, user_id: int):
-        """记录一条消息到 stats_data"""
-        if not group_id or not user_id:
-            return
-        day = _today_str()
-        gkey = str(group_id)
-        ukey = str(user_id)
-        if day not in self.stats_data:
-            self.stats_data[day] = {}
-        if gkey not in self.stats_data[day]:
-            self.stats_data[day][gkey] = {}
-        self.stats_data[day][gkey][ukey] = self.stats_data[day][gkey].get(ukey, 0) + 1
-
-        # 清理过期数据
-        days_sorted = sorted(self.stats_data.keys())
-        if len(days_sorted) > self.stats_retention:
-            for old_day in days_sorted[:-self.stats_retention]:
-                self.stats_data.pop(old_day, None)
-
-        self._save_stats_data()
     # =========================================================
     # 工具函数：将内存数据保存到本地（名单类）
     # =========================================================
     def save_json_data(self):
         data = {
-            "kick_black_list": list(self.kick_black_list),
-            "target_user_list": list(self.target_user_list),
-            "sub_admin_list": list(self.sub_admin_list),
-            "whitelist": list(self.whitelist),
+            'kick_black_list': list(self.kick_black_list),
+            'target_user_list': list(self.target_user_list),
+            'sub_admin_list': list(self.sub_admin_list),
+            'whitelist': list(self.whitelist),
         }
-        try:
-            with open("cesn_data.json", "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.info("已保存名单类数据到 cesn_data.json")
-        except Exception as e:
-            logger.error(f"保存 cesn_data.json 失败：{e}")
+        with open('cesn_data.json', 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        logger.info("已保存名单类数据到 cesn_data.json")
 
     # =========================================================
     # 工具函数：延迟自动撤回指定 message_id
@@ -832,279 +672,6 @@ class AutoRecallKeywordPlugin(Star):
                 self.user_message_times[key].clear()
                 self.user_message_ids[key].clear()
 
-
-
-    # =========================================================
-    # 绘图 & HTML 渲染（不依赖自带字体；按系统字体/内置字体兜底）
-    # =========================================================
-    def _pick_font(self, size=32):
-        """返回一个可用的 PIL ImageFont 对象；尝试系统字体，失败退回 Pillow 内置默认字体。"""
-        # 自定义字体（如果配置里给了就用，没有也没关系）
-        try:
-            if getattr(self, "img_font_path", None):
-                return ImageFont.truetype(self.img_font_path, size)
-        except Exception:
-            pass
-        # Linux 常见中文
-        try:
-            return ImageFont.truetype("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", size)
-        except Exception:
-            pass
-        # Windows 常见中文
-        try:
-            return ImageFont.truetype("C:/Windows/Fonts/simhei.ttf", size)
-        except Exception:
-            pass
-        # 兜底
-        return ImageFont.load_default()
-
-    def _render_rank_image(self, title: str, rows: list[tuple[str, int]]) -> str | None:
-        """生成排行榜图片（Pillow），返回文件路径；失败返回 None。"""
-        if not PIL_OK:
-            return None
-        _ensure_dir(self.img_save_dir)
-
-        width = self.img_width
-        height = self.img_padding*2 + self.img_row_height*(len(rows)+1)
-        img = Image.new("RGB", (width, height), (255, 255, 255))
-        draw = ImageDraw.Draw(img)
-
-        font_title = self._pick_font(32)
-        font_row   = self._pick_font(24)
-
-        # 标题
-        draw.text((self.img_padding, self.img_padding), title, fill=(0, 0, 0), font=font_title)
-
-        # 行数据
-        for idx, (name, cnt) in enumerate(rows, start=1):
-            color = self.img_line_palette[(idx-1) % len(self.img_line_palette)]
-            text = f"{idx}. {name} 今日已发送 {cnt} 条消息"
-            y = self.img_padding + self.img_row_height*idx
-            draw.text((self.img_padding, y), text, fill=color, font=font_row)
-
-        fn = os.path.join(self.img_save_dir, f"rank_{int(time.time())}.png")
-        img.save(fn)
-        return fn
-
-    def _render_my_today_card(self, name: str, uid: str, cnt: int) -> str | None:
-        """生成‘我的发言’卡片（Pillow），返回文件路径；失败返回 None。"""
-        if not PIL_OK:
-            return None
-        _ensure_dir(self.img_save_dir)
-
-        width = self.img_width
-        height = 320
-        img = Image.new("RGB", (width, height), (255, 255, 255))
-        draw = ImageDraw.Draw(img)
-
-        font_mid = self._pick_font(24)
-
-        lines = [
-            f"用户：{name}",
-            f"QQ：{uid}",
-            f"今日发言：{cnt} 条",
-            f"查询时间：{_now_local().strftime('%Y-%m-%d %H:%M:%S')}"
-        ]
-        y = self.img_padding
-        for i, line in enumerate(lines):
-            color = self.img_line_palette[i % len(self.img_line_palette)]
-            draw.text((self.img_padding, y), line, fill=color, font=font_mid)
-            y += 50
-
-        fn = os.path.join(self.img_save_dir, f"my_{uid}_{int(time.time())}.png")
-        img.save(fn)
-        return fn
-
-def _build_rank_html(self, title: str, rows: list[tuple[str, int]]) -> str:
-    items = "\n".join(
-        f"<tr><td>{i+1}</td><td>{name}</td><td>{cnt}</td></tr>"
-        for i, (name, cnt) in enumerate(rows)
-    )
-    css = """
-    <style>
-    *{margin:0;padding:0;box-sizing:border-box;}
-    body{
-      font-family:"Noto Sans CJK SC","Noto Sans CJK","Microsoft YaHei","PingFang SC",
-                  "WenQuanYi Micro Hei","SimHei",Arial,sans-serif;
-      background:#f7f7f9; padding:24px;
-    }
-    .card{width:900px; background:#fff; border-radius:16px; box-shadow:0 6px 18px rgba(0,0,0,.08); padding:24px;}
-    .title{font-size:22px; font-weight:700; margin-bottom:14px;}
-    table{width:100%; border-collapse:collapse; overflow:hidden; border-radius:12px;}
-    thead tr{background:#111827; color:#fff;}
-    th,td{padding:12px 14px; text-align:left; font-size:16px;}
-    tbody tr:nth-child(odd){background:#fafafa;}
-    tbody tr:nth-child(even){background:#f0f0f3;}
-    td:nth-child(1){width:72px; font-weight:700;}
-    td:nth-child(3){text-align:right; width:160px;}
-    .foot{margin-top:10px; color:#6b7280; font-size:12px;}
-    </style>
-    """
-    now = _now_local().strftime("%Y-%m-%d %H:%M:%S")
-    html = f"""<!doctype html><html><head><meta charset="utf-8">{css}</head>
-    <body><div class="card">
-      <div class="title">{title}</div>
-      <table>
-        <thead><tr><th>#</th><th>成员</th><th>消息数</th></tr></thead>
-        <tbody>{items}</tbody>
-      </table>
-      <div class="foot">生成时间：{now}</div>
-    </div></body></html>"""
-    return html
-
-def _build_mycard_html(self, name: str, uid: str, cnt: int) -> str:
-    css = """
-    <style>
-    body{
-      margin:0;padding:24px;background:#f7f7f9;
-      font-family:"Noto Sans CJK SC","Noto Sans CJK","Microsoft YaHei","PingFang SC",
-                   "WenQuanYi Micro Hei","SimHei",Arial,sans-serif;
-    }
-    .card{width:900px;background:#fff;border-radius:16px;box-shadow:0 6px 18px rgba(0,0,0,.08);padding:28px}
-    .title{font-size:22px;font-weight:700;margin-bottom:18px}
-    .row{display:flex;gap:12px;margin:8px 0}
-    .key{width:120px;color:#6b7280}
-    .val{font-weight:600}
-    .foot{margin-top:12px;color:#6b7280;font-size:12px}
-    </style>
-    """
-    now = _now_local().strftime("%Y-%m-%d %H:%M:%S")
-    html = f"""<!doctype html><html><head><meta charset="utf-8">{css}</head>
-    <body><div class="card">
-      <div class="title">今日我的发言</div>
-      <div class="row"><div class="key">用户</div><div class="val">{name}</div></div>
-      <div class="row"><div class="key">QQ</div><div class="val">{uid}</div></div>
-      <div class="row"><div class="key">今日发言</div><div class="val">{cnt} 条</div></div>
-      <div class="foot">生成时间：{now}</div>
-    </div></body></html>"""
-    return html
-def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
-    if not self.html_render_enable:
-        return None
-    _ensure_dir(self.img_save_dir)
-    out = os.path.join(self.img_save_dir, f"{out_prefix}_{int(time.time())}.png")
-
-    # 优先 imgkit + wkhtmltoimage
-    if IMGKIT_OK:
-        options = {
-            "format": "png",
-            "encoding": "utf-8",
-            "width": str(self.img_width),
-            "quality": "100",
-            "disable-smart-shrinking": "",
-            "dpi": "192",
-            "zoom": "2",
-            "enable-local-file-access": ""
-        }
-        wk_path = (self.wkhtmltoimage_path or "/usr/bin/wkhtmltoimage")
-        try:
-            cfg = imgkit.config(wkhtmltoimage=wk_path)
-        except Exception:
-            cfg = None
-
-        try:
-            if cfg:
-                imgkit.from_string(html, out, options=options, config=cfg)
-                if os.path.exists(out):
-                    return out
-        except Exception as e:
-            logger.error(f"[HTML] imgkit 渲染失败: {e}")
-
-    # 退回 html2image
-    if H2I_OK:
-        try:
-            hti = Html2Image(output_path=self.img_save_dir)
-            fname = f"{out_prefix}_{int(time.time())}.png"
-            hti.screenshot(html_str=html, save_as=fname, size=(self.img_width, None))
-            path = os.path.join(self.img_save_dir, fname)
-            if os.path.exists(path):
-                return path
-        except Exception as e:
-            logger.error(f"[HTML] html2image 渲染失败: {e}")
-
-    return None
-
-    def _to_cq_image_base64(self, path: str) -> str | None:
-        try:
-            with open(path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode()
-            return "base64://" + b64
-        except Exception as e:
-            logger.error(f"[Image] Base64 转换失败 {path}: {e}")
-            return None
-
-    # =========================================================
-    # 发言榜/个人统计指令（被 auto_recall 调用）
-    # =========================================================
-    async def _handle_rank(self, event: AstrMessageEvent, mode: str = "day"):
-        gid = str(event.get_group_id())
-        day = _today_str()
-        rows = []
-        if mode == "day":
-            data = self.stats_data.get(day, {}).get(gid, {})
-            rows = sorted(data.items(), key=lambda x: x[1], reverse=True)[:self.stats_top_n]
-            title = f"{day} 今日发言榜"
-        else:  # week
-            days = _week_dates(_now_local(), 7)
-            agg = {}
-            for d in days:
-                gmap = self.stats_data.get(d, {}).get(gid, {})
-                for uid, cnt in gmap.items():
-                    agg[uid] = agg.get(uid, 0) + cnt
-            rows = sorted(agg.items(), key=lambda x: x[1], reverse=True)[:self.stats_top_n]
-            title = f"{days[0]} ~ {days[-1]} 一周发言榜"
-
-        if not rows:
-            await event.bot.send_group_msg(group_id=int(gid), message="暂无统计数据")
-            return
-
-        # 转换 uid->name
-        coros = [self._resolve_display_name_anywhere(event, int(gid), uid) for uid, _ in rows]
-        names = await asyncio.gather(*coros, return_exceptions=True)
-        rows_named = []
-        for (uid, cnt), nm in zip(rows, names):
-            nm = nm if isinstance(nm, str) else str(uid)
-            rows_named.append((nm, cnt))
-
-        html = self._build_rank_html(title, rows_named)
-        fn = self._html_to_image(html, out_prefix="rank") or self._render_rank_image(title, rows_named)
-
-        if fn:
-            cq_file = self._to_cq_image_base64(fn)
-            if cq_file:
-                await event.bot.send_group_msg(
-                    group_id=int(gid),
-                    message=[{"type": "image", "data": {"file": cq_file}}]
-                )
-            else:
-                await event.bot.send_group_msg(group_id=int(gid), message="生成图片失败")
-        else:
-            text = title + "\n" + "\n".join([f"{i+1}. {nm} {cnt}" for i, (nm, cnt) in enumerate(rows_named)])
-            await event.bot.send_group_msg(group_id=int(gid), message=text)
-
-    async def _handle_my_stats(self, event: AstrMessageEvent):
-        gid = str(event.get_group_id())
-        uid = str(event.get_sender_id())
-        day = _today_str()
-        cnt = self.stats_data.get(day, {}).get(gid, {}).get(uid, 0)
-        name = await self._resolve_display_name_anywhere(event, int(gid), uid)
-
-        html = self._build_mycard_html(name, uid, cnt)
-        fn = self._html_to_image(html, out_prefix="my") or self._render_my_today_card(name, uid, cnt)
-
-        if fn:
-            cq_file = self._to_cq_image_base64(fn)
-            if cq_file:
-                await event.bot.send_group_msg(
-                    group_id=int(gid),
-                    message=[{"type": "image", "data": {"file": cq_file}}]
-                )
-            else:
-                await event.bot.send_group_msg(group_id=int(gid), message="生成图片失败")
-        else:
-            await event.bot.send_group_msg(group_id=int(gid), message=f"{name} 今日已发送 {cnt} 条消息")
-
-
     # =========================================================
     # 娱乐功能：封杀倒计时（跳着撤回）+ 最终尝试禁言60秒
     # =========================================================
@@ -1226,14 +793,10 @@ def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
         if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
             return
 
-        # ---------- 获取基础信息 ----------
         group_id = event.get_group_id()
         sender_id = event.get_sender_id()
         message_str = event.message_str.strip()
         message_id = event.message_obj.message_id
-
-        # ---------- 新增：发言计数 ----------
-        self._bump_stats(group_id, sender_id)
 
         # ---------- 主人主动退群命令 ----------
         handled = await self.handle_owner_leave_group(event, message_str)
@@ -1242,12 +805,17 @@ def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
 
         # ---------- 新增：我的身份（人人可查） ----------
         if message_str == "我的身份":
+            # 群内名称
             name = await self._get_group_display_name(event, int(group_id), int(sender_id))
+            # 角色身份
             role = await self._get_member_role(event, int(group_id), int(sender_id))
             role_cn = self._role_label(role)
+            # 权威认证
             auth = self.authority_cert.get(str(sender_id), "无名小辈")
+            # 时间
             ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
+            # 美化输出（卡片风格）
             text = (
                 "👑 我的身份\n"
                 "━━━━━━━━━\n"
@@ -1337,17 +905,6 @@ def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
                         logger.error(f"自动回复失败: {e}")
                     break
 
-        # ---------- 新增：发言统计指令 ----------
-        if message_str == "发言日榜":
-            await self._handle_rank(event, mode="day")
-            return
-        if message_str == "发言周榜":
-            await self._handle_rank(event, mode="week")
-            return
-        if message_str == "我的发言":
-            await self._handle_my_stats(event)
-            return
-
         # ---------- 指令：查询违规 ----------
         if message_str.startswith("查询违规"):
             await self.handle_check_violation(event)
@@ -1366,10 +923,11 @@ def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
             "加白", "移白", "白名单列表",
             "黑名单列表", "针对列表", "管理员列表",
             "封杀",
-            "认证", "移除认证",
-            "清空白名单",
+            "认证", "移除认证",  # 新增：权威认证命令（仅主人）
+            "清空白名单",          # 新增：清空白名单
         )
         if message_str.startswith(command_keywords):
+            # 特判：认证类命令放到 _is_operator 检查之前，因为它需要更严格（仅主人）
             if message_str.startswith("认证") or message_str.startswith("移除认证"):
                 await self.handle_certify(event)
                 return
@@ -1393,7 +951,7 @@ def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
         except Exception as e:
             logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
 
-        # ---------- 黑名单兜底 ----------
+        # ---------- 黑名单：发言触发兜底（只在当前群处理+撤回） ----------
         if str(sender_id) in self.kick_black_list:
             if await self._bot_is_admin(event, int(group_id)):
                 try:
@@ -1403,6 +961,7 @@ def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
                         await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
                     await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
 
+                    # 新增：仅在当前群撤回其最近 N 条
                     try:
                         removed = await self._recall_recent_messages_of_user(event, int(group_id), str(sender_id), self.recall_on_kick_count)
                         if removed > 0:
@@ -1483,7 +1042,7 @@ def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
                     await self.try_recall(event, message_id, group_id, sender_id)
                     return
 
-        # ---------- 刷屏检测 ----------
+        # ---------- 刷屏检测（禁言 + 批量撤回） ----------
         now = time.time()
         key = (group_id, sender_id)
         self.user_message_times[key].append(now)
@@ -1500,7 +1059,6 @@ def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
                             logger.error(f"刷屏批量撤回失败: {e}")
                 self.user_message_times[key].clear()
                 self.user_message_ids[key].clear()
-
 
     # =========================================================
     # 撤回封装（输出失败原因/角色）
@@ -2098,4 +1656,4 @@ def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
     # 插件卸载钩子
     # =========================================================
     async def terminate(self):
-        logger.info("AutoRecallKeywordPlugin 插件已被卸载。")
+        logger.info("AutoRecallKeywordPlugin 插件已被卸载。") 
