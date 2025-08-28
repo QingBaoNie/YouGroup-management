@@ -348,13 +348,11 @@ class AutoRecallKeywordPlugin(Star):
 
         self._save_stats_data()
     # =========================================================
-    # 新增：绘图函数
+    # 新增：绘图函数（移除自定义字体，强制使用 Pillow 内置默认字体）
     # =========================================================
     def _pick_font(self, size=32):
-        try:
-            return ImageFont.truetype(self.img_font_path, size)
-        except Exception:
-            return ImageFont.load_default()
+        # 强制使用默认字体，避免乱码
+        return ImageFont.load_default()
 
     def _render_rank_image(self, title: str, rows: list[tuple[str, int]]) -> str:
         """生成排行榜图片，返回文件路径"""
@@ -367,8 +365,8 @@ class AutoRecallKeywordPlugin(Star):
         img = Image.new("RGB", (width, height), (255,255,255))
         draw = ImageDraw.Draw(img)
 
-        font_title = self._pick_font(42)
-        font_row   = self._pick_font(32)
+        font_title = self._pick_font(32)   # 标题字体（默认字体）
+        font_row   = self._pick_font(24)   # 每行字体（默认字体）
 
         # 标题
         draw.text((self.img_padding, self.img_padding), title, fill=(0,0,0), font=font_title)
@@ -395,8 +393,8 @@ class AutoRecallKeywordPlugin(Star):
         img = Image.new("RGB", (width, height), (255,255,255))
         draw = ImageDraw.Draw(img)
 
-        font_big = self._pick_font(40)
-        font_mid = self._pick_font(32)
+        font_big = self._pick_font(28)
+        font_mid = self._pick_font(24)
 
         lines = [
             f"用户：{name}",
@@ -408,7 +406,7 @@ class AutoRecallKeywordPlugin(Star):
         for i, line in enumerate(lines):
             color = self.img_line_palette[i%len(self.img_line_palette)]
             draw.text((self.img_padding, y), line, fill=color, font=font_mid)
-            y += 60
+            y += 50
 
         fn = os.path.join(self.img_save_dir, f"my_{uid}_{int(time.time())}.png")
         img.save(fn)
