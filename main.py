@@ -71,11 +71,7 @@ class AutoRecallKeywordPlugin(Star):
         # —— 新增：独立文件
         self.auth_data_file = "auth_data.json"
         # —— 群成员索引（避免单人查询超时/误判）
-        self._member_index: dict[int, dict[str, dict]] = {}  # { group_id: { "uid": rec, ... } }
-        self._member_index_built_at: dict[int, float] = {}   # { group_id: ts }
         self._member_idx_ttl = 60  # 秒：索引过期时间，过期会自动重建
-
-
     # =========================================================
     # 初始化配置（从外部 config 注入、解析开关、打印日志）
     # =========================================================
@@ -160,7 +156,6 @@ class AutoRecallKeywordPlugin(Star):
         logger.info(f"入群邀请: auto_accept_owner_invite={self.auto_accept_owner_invite}, reject_non_owner_invite={self.reject_non_owner_invite}")
         logger.info(f"踢/踢黑后撤回最近条数: {self.recall_on_kick_count}")
         logger.info(f"权威条目: {len(self.authority_cert)}")
-
     # =========================================================
     # 工具函数：从本地 JSON 恢复（若存在）—— 仅名单类
     # =========================================================
@@ -243,7 +238,6 @@ class AutoRecallKeywordPlugin(Star):
         with open('cesn_data.json', 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info("已保存名单类数据到 cesn_data.json")
-
     # =========================================================
     # 工具函数：延迟自动撤回指定 message_id
     # =========================================================
@@ -346,7 +340,6 @@ class AutoRecallKeywordPlugin(Star):
         s = s.replace("\u200b", "").replace("\u2060", "").replace("\u2061", "").replace("\u2062", "").replace("\u2063", "")
         s = s.strip()
         return len(s)
-
     # =========================================================
     # 权限相关（基于群成员索引）
     # =========================================================
@@ -458,7 +451,6 @@ class AutoRecallKeywordPlugin(Star):
         # 可能是刚进群/改名导致缓存未命中 → 强刷一次
         idx = await self._refresh_group_member_index(event, group_id)
         return idx.get(str(user_id))
-
     # =========================================================
     # 入群邀请处理
     # =========================================================
@@ -593,7 +585,6 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"[入群踢黑] 踢出黑名单 {uid} 失败：{e}")
             return False
-
     # =========================================================
     # 自动回复：支持 {face:ID} 自动转 CQ 表情段
     # =========================================================
@@ -719,7 +710,6 @@ class AutoRecallKeywordPlugin(Star):
 
         logger.warning("[美女接口] 未解析到有效 URL（可能服务器直接 302 到视频但被拦/跨域/鉴权）")
         return None
-
     # =========================================================
     # 刷屏累加并视情况禁言 + 批量撤回（统一入口）
     # =========================================================
@@ -800,12 +790,10 @@ class AutoRecallKeywordPlugin(Star):
 
         final_msg = f"处罚已下达！{display_name}已被永久封杀！！！ "
         await _send(final_msg)
-
     # =========================================================
     # 获取群内显示名（群名片优先，其次昵称，兜底用QQ号）
     # =========================================================
     async def _get_group_display_name(self, event: AstrMessageEvent, group_id: int, user_id: int) -> str:
-        # 索引优先
         try:
             rec = await self.get_member_record(event, int(group_id), int(user_id))
             if rec:
@@ -813,13 +801,7 @@ class AutoRecallKeywordPlugin(Star):
                 return name or str(user_id)
         except Exception:
             pass
-        # 兜底：再去单查（可能还是会超时）
-        try:
-            info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(user_id))
-            name = (info.get("card") or "").strip() or (info.get("nickname") or "").strip()
-            return name or str(user_id)
-        except Exception:
-            return str(user_id)
+        return str(user_id)
 
     # 获取全局昵称（不在群内时用）
     async def _get_global_nickname(self, event: AstrMessageEvent, user_id: int | str) -> str:
@@ -830,18 +812,35 @@ class AutoRecallKeywordPlugin(Star):
             return str(user_id)
 
     # 优先群内显示名，失败就退回全局昵称
-    async def _resolve_display_name_anywhere(self, event: AstrMessageEvent, group_id: int, user_id: int | str) -> str:
+    async def _resolve_display_name_anywhere(
+        self,
+        event: AstrMessageEvent,
+        group_id: int,
+        user_id: int | str
+    ) -> str:
+        """
+        优先用本群成员索引拿显示名（群名片优先，其次昵称）；
+        若不在群或索引暂不可用，则退回全局昵称；
+        最终兜底返回 user_id 字符串。
+        """
+        uid_str = str(user_id)
         try:
-            rec = await self.get_member_record(event, int(group_id), int(user_id))
+            # 先走成员索引（避免 get_group_member_info 超时）
+            rec = await self.get_member_record(event, int(group_id), int(uid_str))
             if rec:
                 name = (rec.get("card") or "").strip() or (rec.get("nickname") or "").strip()
                 if name:
                     return name
-        except Exception:
-            pass
-        # 不在群里就查全局昵称
-        return await self._get_global_nickname(event, user_id)
+        except Exception as e:
+            logger.error(f"_resolve_display_name_anywhere | 索引查询失败 gid={group_id} uid={uid_str}: {e}")
 
+        # 不在群里或索引没命中 → 查全局昵称
+        try:
+            global_name = await self._get_global_nickname(event, uid_str)
+            return global_name or uid_str
+        except Exception as e:
+            logger.error(f"_resolve_display_name_anywhere | 全局昵称查询失败 uid={uid_str}: {e}")
+            return uid_str
 
     # 格式化列表 ["123","456"] → ["123(忧)","456(某某)"]
     async def _format_id_list_with_names(self, event: AstrMessageEvent, group_id: int, ids: list[str]) -> list[str]:
@@ -922,7 +921,6 @@ class AutoRecallKeywordPlugin(Star):
 
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
-
         # ---------- 我要看美女 ----------
         if "我要看美女" in message_str:
             now = time.time()
@@ -1008,11 +1006,11 @@ class AutoRecallKeywordPlugin(Star):
             "加白", "移白", "白名单列表",
             "黑名单列表", "针对列表", "管理员列表",
             "封杀",
-            "认证", "移除认证",  # 新增：权威认证命令（仅主人）
-            "清空白名单",          # 新增：清空白名单
+            "认证", "移除认证",
+            "清空白名单",
         )
         if message_str.startswith(command_keywords):
-            # 特判：认证类命令放到 _is_operator 检查之前，因为它需要更严格（仅主人）
+            # 认证/移除认证：仅主人，优先分流
             if message_str.startswith("认证") or message_str.startswith("移除认证"):
                 await self.handle_certify(event)
                 return
@@ -1030,12 +1028,11 @@ class AutoRecallKeywordPlugin(Star):
 
         # ---------- 群主/管理员发言跳过撤回 ----------
         try:
-            member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
-            if member_info.get("role", "member") in ("owner", "admin"):
+            rec = await self.get_member_record(event, int(group_id), int(sender_id))
+            if self._role_of(rec) in ("owner", "admin"):
                 return
         except Exception as e:
-            logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
-
+            logger.error(f"获取用户 {sender_id} 群身份失败(索引): {e}")
 
         # ---------- 黑名单：发言触发兜底（只在当前群处理+撤回） ----------
         if str(sender_id) in self.kick_black_list:
@@ -1047,7 +1044,7 @@ class AutoRecallKeywordPlugin(Star):
                         await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
                     await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
 
-                    # 新增：仅在当前群撤回其最近 N 条
+                    # 只在当前群撤回其最近 N 条
                     try:
                         removed = await self._recall_recent_messages_of_user(event, int(group_id), str(sender_id), self.recall_on_kick_count)
                         if removed > 0:
@@ -1145,7 +1142,6 @@ class AutoRecallKeywordPlugin(Star):
                             logger.error(f"刷屏批量撤回失败: {e}")
                 self.user_message_times[key].clear()
                 self.user_message_ids[key].clear()
-
     # =========================================================
     # 撤回封装（输出失败原因/角色）
     # =========================================================
@@ -1154,8 +1150,8 @@ class AutoRecallKeywordPlugin(Star):
             await event.bot.delete_msg(message_id=message_id)
         except Exception as e:
             try:
-                member_info = await event.bot.get_group_member_info(group_id=int(group_id), user_id=int(sender_id))
-                role = member_info.get('role', 'member')
+                rec = await self.get_member_record(event, int(group_id), int(sender_id))
+                role = self._role_of(rec)
                 logger.error(f"撤回失败: {e}（用户角色: {role}）")
             except Exception as ex:
                 logger.error(f"撤回失败且查询用户角色失败: {e} / 查询错误: {ex}")
@@ -1469,7 +1465,6 @@ class AutoRecallKeywordPlugin(Star):
 
         # —— 特权命令：清空白名单（仅主人），放在权限校验之前确保非主人统一得到“无权使用”
         if msg.startswith("清空白名单"):
-            # owner 未配置 或 不是 owner → 无权使用（自动撤回）
             if not self.owner_qq or str(sender_id) != self.owner_qq:
                 try:
                     resp = await event.bot.send_group_msg(group_id=int(group_id), message="无权使用")
@@ -1479,7 +1474,6 @@ class AutoRecallKeywordPlugin(Star):
                     logger.error(f"发送无权使用提示失败: {e}")
                 return
 
-            # 仅主人
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 清空白名单")
             try:
@@ -1493,7 +1487,6 @@ class AutoRecallKeywordPlugin(Star):
                 except Exception:
                     pass
             return
-
 
         if msg.startswith("全体解言"):
             if hasattr(event, "mark_action"):
@@ -1540,7 +1533,6 @@ class AutoRecallKeywordPlugin(Star):
             text = "以下为 子管理员QQ 总计{}\n{}".format(len(items), ("\n".join(lines) if lines else "（空）"))
             await event.bot.send_group_msg(group_id=int(group_id), message=text)
             return
-
 
         # 需要目标QQ的命令：支持 @ 与 #QQ号
         target_id = self._extract_target_from_msg(event, msg)
@@ -1593,13 +1585,12 @@ class AutoRecallKeywordPlugin(Star):
                     self.kick_black_list.add(target_id)
                     self.save_json_data()
 
-                # 当前群按规则处理：机器人需为管理；目标若为管理则忽略
+                # 当前群按规则处理
                 try:
                     rec = await self.get_member_record(event, int(group_id), int(target_id))
                     t_role = str((rec or {}).get("role", "member"))
                 except Exception:
                     t_role = "member"
-
 
                 bot_is_admin = await self._bot_is_admin(event, int(group_id))
 
@@ -1614,7 +1605,7 @@ class AutoRecallKeywordPlugin(Star):
                         await event.bot.set_group_kick(group_id=int(group_id), user_id=int(target_id))
                     await event.bot.send_group_msg(group_id=int(group_id), message=f"『{target_id}』 已加入踢黑名单并踢出")
 
-                # 仅在当前群撤回其最近 N 条（不管是否成功踢出，只要触发了踢黑）
+                # 仅在当前群撤回其最近 N 条
                 try:
                     removed = await self._recall_recent_messages_of_user(event, int(group_id), target_id, self.recall_on_kick_count)
                     if removed > 0:
@@ -1743,4 +1734,4 @@ class AutoRecallKeywordPlugin(Star):
     # 插件卸载钩子
     # =========================================================
     async def terminate(self):
-        logger.info("AutoRecallKeywordPlugin 插件已被卸载。") 
+        logger.info("AutoRecallKeywordPlugin 插件已被卸载。")
