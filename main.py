@@ -170,95 +170,97 @@ class AutoRecallKeywordPlugin(Star):
         logger.info(f"入群邀请: auto_accept_owner_invite={self.auto_accept_owner_invite}, reject_non_owner_invite={self.reject_non_owner_invite}")
         logger.info(f"踢/踢黑后撤回最近条数: {self.recall_on_kick_count}")
         logger.info(f"权威条目: {len(self.authority_cert)}")
-# =========================================================
-# 发言统计工具函数 - 每群独立存储
-# =========================================================
+    # =========================================================
+    # 发言统计工具函数 - 每群独立存储
+    # =========================================================
+    def _stats_dir_of(self, group_id: int) -> str:
+        """返回某群的统计目录路径"""
+        return os.path.join(self.talk_base_dir, str(group_id))
 
-def _stats_dir_of(self, group_id: int) -> str:
-    """返回某群的统计目录路径"""
-    return os.path.join(self.talk_base_dir, str(group_id))
+    def _stats_file_of(self, group_id: int) -> str:
+        """返回某群的统计文件路径"""
+        return os.path.join(self._stats_dir_of(group_id), "stats.json")
 
-def _stats_file_of(self, group_id: int) -> str:
-    """返回某群的统计文件路径"""
-    return os.path.join(self._stats_dir_of(group_id), "stats.json")
-
-def _load_group_stats(self, group_id: int) -> dict:
-    """加载某群的统计文件"""
-    path = self._stats_file_of(group_id)
-    try:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        else:
+    def _load_group_stats(self, group_id: int) -> dict:
+        """加载某群的统计文件"""
+        path = self._stats_file_of(group_id)
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            else:
+                data = {"by_day": {}}
+        except Exception as e:
+            logger.error(f"[talk] 加载失败 gid={group_id}: {e}")
             data = {"by_day": {}}
-    except Exception as e:
-        logger.error(f"[talk] 加载失败 gid={group_id}: {e}")
-        data = {"by_day": {}}
-    data.setdefault("by_day", {})
-    return data
+        data.setdefault("by_day", {})
+        return data
 
-def _save_group_stats(self, group_id: int, stats: dict):
-    """保存某群的统计文件"""
-    try:
-        os.makedirs(self._stats_dir_of(group_id), exist_ok=True)
-        with open(self._stats_file_of(group_id), "w", encoding="utf-8") as f:
-            json.dump(stats, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.error(f"[talk] 保存失败 gid={group_id}: {e}")
+    def _save_group_stats(self, group_id: int, stats: dict):
+        """保存某群的统计文件"""
+        try:
+            os.makedirs(self._stats_dir_of(group_id), exist_ok=True)
+            with open(self._stats_file_of(group_id), "w", encoding="utf-8") as f:
+                json.dump(stats, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"[talk] 保存失败 gid={group_id}: {e}")
 
-def _prune_old_days_inplace(self, stats: dict, keep_days: int):
-    """删除超出保留天数的旧数据"""
-    try:
+    def _prune_old_days_inplace(self, stats: dict, keep_days: int):
+        """删除超出保留天数的旧数据"""
+        try:
+            by_day = stats.get("by_day", {})
+            days = sorted(by_day.keys())
+            if len(days) > keep_days:
+                for d in days[:-keep_days]:
+                    by_day.pop(d, None)
+        except Exception as e:
+            logger.error(f"[talk] 清理历史失败: {e}")
+
+    def _today_str(self) -> str:
+        """返回今天的日期字符串 YYYYMMDD"""
+        return time.strftime("%Y%m%d", time.localtime())
+
+    def _bump_talk_today(self, group_id: int, user_id: int):
+        """对指定群今日发言 +1"""
+        stats = self._load_group_stats(group_id)
+        by_day = stats.setdefault("by_day", {})
+        d = self._today_str()
+        day_map = by_day.setdefault(d, {})
+        uid = str(user_id)
+        day_map[uid] = int(day_map.get(uid, 0)) + 1
+        self._prune_old_days_inplace(stats, self.talk_keep_days)
+        self._save_group_stats(group_id, stats)
+
+    def _query_day_counts(self, group_id: int, day_str: str) -> dict[str, int]:
+        """返回某群某天的 {uid: count}"""
+        stats = self._load_group_stats(group_id)
+        return dict(stats.get("by_day", {}).get(day_str, {}))
+
+    def _query_last_n_days_sum(self, group_id: int, n: int) -> dict[str, int]:
+        """返回某群最近 n 天的汇总 {uid: sum}"""
+        stats = self._load_group_stats(group_id)
         by_day = stats.get("by_day", {})
-        days = sorted(by_day.keys())
-        if len(days) > keep_days:
-            for d in days[:-keep_days]:
-                by_day.pop(d, None)
-    except Exception as e:
-        logger.error(f"[talk] 清理历史失败: {e}")
+        res: dict[str, int] = {}
+        try:
+            today = datetime.fromtimestamp(time.time())
+            for i in range(n):
+                d = (today - timedelta(days=i)).strftime("%Y%m%d")
+                for uid, c in by_day.get(d, {}).items():
+                    res[uid] = res.get(uid, 0) + int(c)
+        except Exception as e:
+            logger.error(f"[talk] 聚合失败 gid={group_id}: {e}")
+        return res
 
-def _today_str(self) -> str:
-    """返回今天的日期字符串 YYYYMMDD"""
-    return time.strftime("%Y%m%d", time.localtime())
+    def _delete_group_talk_data(self, group_id: int):
+        """清空某群的统计数据"""
+        try:
+            d = self._stats_dir_of(group_id)
+            if os.path.isdir(d):
+                shutil.rmtree(d, ignore_errors=True)
+                logger.info(f"[talk] 已清空群 {group_id} 的统计数据")
+        except Exception as e:
+            logger.error(f"[talk] 删除群统计目录失败 gid={group_id}: {e}")
 
-def _bump_talk_today(self, group_id: int, user_id: int):
-    """对指定群今日发言 +1"""
-    stats = self._load_group_stats(group_id)
-    by_day = stats.setdefault("by_day", {})
-    d = self._today_str()
-    day_map = by_day.setdefault(d, {})
-    uid = str(user_id)
-    day_map[uid] = int(day_map.get(uid, 0)) + 1
-    self._prune_old_days_inplace(stats, self.talk_keep_days)
-    self._save_group_stats(group_id, stats)
-
-def _query_day_counts(self, group_id: int, day_str: str) -> dict[str, int]:
-    """返回某群某天的 {uid: count}"""
-    stats = self._load_group_stats(group_id)
-    return dict(stats.get("by_day", {}).get(day_str, {}))
-
-def _query_last_n_days_sum(self, group_id: int, n: int) -> dict[str, int]:
-    """返回某群最近 n 天的汇总 {uid: sum}"""
-    stats = self._load_group_stats(group_id)
-    by_day = stats.get("by_day", {})
-    res: dict[str, int] = {}
-    try:
-        today = datetime.fromtimestamp(time.time())
-        for i in range(n):
-            d = (today - timedelta(days=i)).strftime("%Y%m%d")
-            for uid, c in by_day.get(d, {}).items():
-                res[uid] = res.get(uid, 0) + int(c)
-    except Exception as e:
-        logger.error(f"[talk] 聚合失败 gid={group_id}: {e}")
-    return res
-def _delete_group_talk_data(self, group_id: int):
-    try:
-        d = self._stats_dir_of(group_id)
-        if os.path.isdir(d):
-            shutil.rmtree(d, ignore_errors=True)
-            logger.info(f"[talk] 已清空群 {group_id} 的统计数据")
-    except Exception as e:
-        logger.error(f"[talk] 删除群统计目录失败 gid={group_id}: {e}")
 
 # =========================================================
 # 工具函数：从本地 JSON 恢复（若存在）—— 仅名单类
