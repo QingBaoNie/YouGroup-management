@@ -251,6 +251,7 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"读取 cesn_data.json 失败：{e}")
 
+    
     # =========================================================
     # 新增：数据独立读写 + 旧数据迁移
     # =========================================================
@@ -859,24 +860,28 @@ class AutoRecallKeywordPlugin(Star):
                 self.user_message_times[key].clear()
                 self.user_message_ids[key].clear()
     # =========================================================
-    # 新增：指令实现
+    # 新增：指令实现（修复图片路径 -> file:/// 绝对路径）
     # =========================================================
-    async def _handle_rank(self, event: AstrMessageEvent, mode:str="day"):
+    def _to_cq_image_file(self, path: str) -> str:
+        abs_path = os.path.abspath(path)  # 转绝对路径
+        return "file:///" + abs_path.replace("\\", "/")  # Windows 路径转 /
+
+    async def _handle_rank(self, event: AstrMessageEvent, mode: str = "day"):
         gid = str(event.get_group_id())
         day = _today_str()
         rows = []
-        if mode=="day":
+        if mode == "day":
             data = self.stats_data.get(day, {}).get(gid, {})
-            rows = sorted(data.items(), key=lambda x:x[1], reverse=True)[:self.stats_top_n]
+            rows = sorted(data.items(), key=lambda x: x[1], reverse=True)[:self.stats_top_n]
             title = f"{day} 今日发言榜"
         else:  # week
             days = _week_dates(_now_local(), 7)
             agg = {}
             for d in days:
                 gmap = self.stats_data.get(d, {}).get(gid, {})
-                for uid,cnt in gmap.items():
-                    agg[uid] = agg.get(uid,0)+cnt
-            rows = sorted(agg.items(), key=lambda x:x[1], reverse=True)[:self.stats_top_n]
+                for uid, cnt in gmap.items():
+                    agg[uid] = agg.get(uid, 0) + cnt
+            rows = sorted(agg.items(), key=lambda x: x[1], reverse=True)[:self.stats_top_n]
             title = f"{days[0]} ~ {days[-1]} 一周发言榜"
 
         if not rows:
@@ -884,18 +889,24 @@ class AutoRecallKeywordPlugin(Star):
             return
 
         # 转换 uid->name
-        coros = [self._resolve_display_name_anywhere(event, int(gid), uid) for uid,_ in rows]
+        coros = [self._resolve_display_name_anywhere(event, int(gid), uid) for uid, _ in rows]
         names = await asyncio.gather(*coros, return_exceptions=True)
         rows_named = []
-        for (uid,cnt),nm in zip(rows,names):
-            nm = nm if isinstance(nm,str) else str(uid)
-            rows_named.append((nm,cnt))
+        for (uid, cnt), nm in zip(rows, names):
+            nm = nm if isinstance(nm, str) else str(uid)
+            rows_named.append((nm, cnt))
 
         fn = self._render_rank_image(title, rows_named)
         if fn:
-            await event.bot.send_group_msg(group_id=int(gid), message=[{"type":"image","data":{"file":fn}}])
+            cq_file = self._to_cq_image_file(fn)
+            await event.bot.send_group_msg(
+                group_id=int(gid),
+                message=[{"type": "image", "data": {"file": cq_file}}]
+            )
         else:
-            text = title + "\n" + "\n".join([f"{i+1}. {nm} {cnt}" for i,(nm,cnt) in enumerate(rows_named)])
+            text = title + "\n" + "\n".join(
+                [f"{i+1}. {nm} {cnt}" for i, (nm, cnt) in enumerate(rows_named)]
+            )
             await event.bot.send_group_msg(group_id=int(gid), message=text)
 
     async def _handle_my_stats(self, event: AstrMessageEvent):
@@ -906,9 +917,17 @@ class AutoRecallKeywordPlugin(Star):
         name = await self._resolve_display_name_anywhere(event, int(gid), uid)
         fn = self._render_my_today_card(name, uid, cnt)
         if fn:
-            await event.bot.send_group_msg(group_id=int(gid), message=[{"type":"image","data":{"file":fn}}])
+            cq_file = self._to_cq_image_file(fn)
+            await event.bot.send_group_msg(
+                group_id=int(gid),
+                message=[{"type": "image", "data": {"file": cq_file}}]
+            )
         else:
-            await event.bot.send_group_msg(group_id=int(gid), message=f"{name} 今日已发送 {cnt} 条消息")
+            await event.bot.send_group_msg(
+                group_id=int(gid),
+                message=f"{name} 今日已发送 {cnt} 条消息"
+            )
+
 
     # =========================================================
     # 娱乐功能：封杀倒计时（跳着撤回）+ 最终尝试禁言60秒
