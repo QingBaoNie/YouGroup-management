@@ -3,14 +3,47 @@ import json
 import re
 import urllib.parse
 import asyncio
+import os
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict, deque
-
 from astrbot import logger
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import filter
 from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent as AstrMessageEvent
+# PIL 可选依赖（用于榜单/卡片图片）
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    PIL_OK = True
+except Exception:
+    PIL_OK = False
+    logger.error("未检测到 Pillow，无法生成发言榜单/个人卡片图片，请安装 pillow")
 
+# ==== 新增：本地时区（中国大陆一般 UTC+8；如你部署在其他时区可改）====
+LOCAL_TZ = timezone(timedelta(hours=8))
+
+def _now_local():
+    return datetime.now(tz=LOCAL_TZ)
+
+def _today_str(dt: datetime | None = None) -> str:
+    dt = dt or _now_local()
+    return dt.strftime("%Y-%m-%d")
+
+def _week_dates(end_dt: datetime | None = None, days: int = 7) -> list[str]:
+    """返回最近 days 天的日期字符串（包含 end_dt 当天），格式 YYYY-MM-DD。"""
+    end_dt = end_dt or _now_local()
+    res = []
+    for i in range(days):
+        d = (end_dt - timedelta(days=i)).strftime("%Y-%m-%d")
+        res.append(d)
+    res.reverse()
+    return res
+
+def _ensure_dir(path: str):
+    try:
+        os.makedirs(path, exist_ok=True)
+    except Exception as e:
+        logger.error(f"[Image] 创建目录失败: {path} | {e}")
 # 新增：异步 HTTP 请求
 try:
     import aiohttp
@@ -70,6 +103,25 @@ class AutoRecallKeywordPlugin(Star):
 
         # —— 新增：独立文件
         self.auth_data_file = "auth_data.json"
+         # ==== 新增：图片渲染配置（可被配置文件 image_config 覆盖）====
+        self.img_font_path = "fonts/NotoSansSC-Regular.otf"   # 第三方/Google 字体
+        self.img_save_dir  = "cache"                          # 缓存目录
+        self.img_width     = 900
+        self.img_row_height= 64
+        self.img_padding   = 32
+        self.img_line_palette = [  # 每行一个颜色（RGB）
+            (66,133,244),(234,67,53),(251,188,5),(52,168,83),(171,71,188),
+            (0,172,193),(255,112,67),(158,157,36),(121,85,72),(85,139,47)
+        ]
+
+        # ==== 新增：统计配置（stats_config）====
+        self.stats_top_n        = 10      # 榜单前 N
+        self.stats_retention    = 120     # 日桶保留天数
+        self.stats_count_recall = True    # 是否统计被撤回消息（如你不想计入，改 False）
+
+        # ==== 新增：统计数据（持久化到 json）====
+        self.stats_file = "stats_data.json"
+        self.stats_data = {}  # { "2025-08-28": { "group_id": { "user_id": count } } }
 
     # =========================================================
     # 初始化配置（从外部 config 注入、解析开关、打印日志）
@@ -143,6 +195,32 @@ class AutoRecallKeywordPlugin(Star):
         # --- 刷屏窗口长度根据配置重置 ---
         self.user_message_times = defaultdict(lambda: deque(maxlen=self.spam_count))
         self.user_message_ids = defaultdict(lambda: deque(maxlen=self.spam_count))
+        # ==== 新增：image_config / stats_config 从配置读取 ====
+        img_cfg = config_data.get("image_config", {})
+        self.img_font_path = img_cfg.get("font_path", self.img_font_path)
+        self.img_save_dir  = img_cfg.get("save_dir", self.img_save_dir)
+        self.img_width     = int(img_cfg.get("width", self.img_width))
+        self.img_row_height= int(img_cfg.get("row_height", self.img_row_height))
+        self.img_padding   = int(img_cfg.get("padding", self.img_padding))
+        pal = img_cfg.get("line_palette", None)
+        if pal:
+            parsed = []
+            for s in pal:
+                try:
+                    r,g,b = map(int, s.split(","))
+                    parsed.append((r,g,b))
+                except Exception:
+                    continue
+            if parsed:
+                self.img_line_palette = parsed
+
+        stats_cfg = config_data.get("stats_config", {})
+        self.stats_top_n        = int(stats_cfg.get("top_n", self.stats_top_n))
+        self.stats_retention    = int(stats_cfg.get("retention_days", self.stats_retention))
+        self.stats_count_recall = bool(stats_cfg.get("count_recalled", self.stats_count_recall))
+
+        _ensure_dir(self.img_save_dir)
+        self._load_stats_data()
 
         # --- 启动日志 ---
         logger.info(f"主人QQ: {self.owner_qq or '(未配置)'}")
@@ -224,6 +302,115 @@ class AutoRecallKeywordPlugin(Star):
             logger.info(f"已保存认证数据到 {self.auth_data_file}")
         except Exception as e:
             logger.error(f"保存 {self.auth_data_file} 失败：{e}")
+    # =========================================================
+    # 新增：统计数据读写
+    # =========================================================
+    def _load_stats_data(self):
+        try:
+            with open(self.stats_file, "r", encoding="utf-8") as f:
+                self.stats_data = json.load(f)
+            logger.info(f"已加载统计数据 {self.stats_file}")
+        except FileNotFoundError:
+            self.stats_data = {}
+        except Exception as e:
+            logger.error(f"加载统计数据失败: {e}")
+            self.stats_data = {}
+
+    def _save_stats_data(self):
+        try:
+            with open(self.stats_file, "w", encoding="utf-8") as f:
+                json.dump(self.stats_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"保存统计数据失败: {e}")
+    # =========================================================
+    # 新增：发言计数
+    # =========================================================
+    def _bump_stats(self, group_id: int, user_id: int):
+        """记录一条消息到 stats_data"""
+        if not group_id or not user_id:
+            return
+        day = _today_str()
+        gkey = str(group_id)
+        ukey = str(user_id)
+        if day not in self.stats_data:
+            self.stats_data[day] = {}
+        if gkey not in self.stats_data[day]:
+            self.stats_data[day][gkey] = {}
+        self.stats_data[day][gkey][ukey] = self.stats_data[day][gkey].get(ukey, 0) + 1
+
+        # 清理过期数据
+        days_sorted = sorted(self.stats_data.keys())
+        if len(days_sorted) > self.stats_retention:
+            for old_day in days_sorted[:-self.stats_retention]:
+                self.stats_data.pop(old_day, None)
+
+        self._save_stats_data()
+    # =========================================================
+    # 新增：绘图函数
+    # =========================================================
+    def _pick_font(self, size=32):
+        try:
+            return ImageFont.truetype(self.img_font_path, size)
+        except Exception:
+            return ImageFont.load_default()
+
+    def _render_rank_image(self, title: str, rows: list[tuple[str, int]]) -> str:
+        """生成排行榜图片，返回文件路径"""
+        if not PIL_OK:
+            return None
+        _ensure_dir(self.img_save_dir)
+
+        width = self.img_width
+        height = self.img_padding*2 + self.img_row_height*(len(rows)+1)
+        img = Image.new("RGB", (width, height), (255,255,255))
+        draw = ImageDraw.Draw(img)
+
+        font_title = self._pick_font(42)
+        font_row   = self._pick_font(32)
+
+        # 标题
+        draw.text((self.img_padding, self.img_padding), title, fill=(0,0,0), font=font_title)
+
+        # 行数据
+        for idx,(name,cnt) in enumerate(rows, start=1):
+            color = self.img_line_palette[(idx-1)%len(self.img_line_palette)]
+            text = f"{idx}. {name} 今日已发送 {cnt} 条消息"
+            y = self.img_padding + self.img_row_height*idx
+            draw.text((self.img_padding, y), text, fill=color, font=font_row)
+
+        fn = os.path.join(self.img_save_dir, f"rank_{int(time.time())}.png")
+        img.save(fn)
+        return fn
+
+    def _render_my_today_card(self, name:str, uid:str, cnt:int) -> str:
+        """生成我的发言卡片，返回文件路径"""
+        if not PIL_OK:
+            return None
+        _ensure_dir(self.img_save_dir)
+
+        width = self.img_width
+        height = 320
+        img = Image.new("RGB", (width, height), (255,255,255))
+        draw = ImageDraw.Draw(img)
+
+        font_big = self._pick_font(40)
+        font_mid = self._pick_font(32)
+
+        lines = [
+            f"用户：{name}",
+            f"QQ：{uid}",
+            f"今日发言：{cnt} 条",
+            f"查询时间：{_now_local().strftime('%Y-%m-%d %H:%M:%S')}"
+        ]
+        y = self.img_padding
+        for i, line in enumerate(lines):
+            color = self.img_line_palette[i%len(self.img_line_palette)]
+            draw.text((self.img_padding, y), line, fill=color, font=font_mid)
+            y += 60
+
+        fn = os.path.join(self.img_save_dir, f"my_{uid}_{int(time.time())}.png")
+        img.save(fn)
+        return fn
 
     # =========================================================
     # 工具函数：将内存数据保存到本地（名单类）
@@ -671,6 +858,57 @@ class AutoRecallKeywordPlugin(Star):
                             logger.error(f"刷屏批量撤回失败 mid={mid}: {e}")
                 self.user_message_times[key].clear()
                 self.user_message_ids[key].clear()
+    # =========================================================
+    # 新增：指令实现
+    # =========================================================
+    async def _handle_rank(self, event: AstrMessageEvent, mode:str="day"):
+        gid = str(event.get_group_id())
+        day = _today_str()
+        rows = []
+        if mode=="day":
+            data = self.stats_data.get(day, {}).get(gid, {})
+            rows = sorted(data.items(), key=lambda x:x[1], reverse=True)[:self.stats_top_n]
+            title = f"{day} 今日发言榜"
+        else:  # week
+            days = _week_dates(_now_local(), 7)
+            agg = {}
+            for d in days:
+                gmap = self.stats_data.get(d, {}).get(gid, {})
+                for uid,cnt in gmap.items():
+                    agg[uid] = agg.get(uid,0)+cnt
+            rows = sorted(agg.items(), key=lambda x:x[1], reverse=True)[:self.stats_top_n]
+            title = f"{days[0]} ~ {days[-1]} 一周发言榜"
+
+        if not rows:
+            await event.bot.send_group_msg(group_id=int(gid), message="暂无统计数据")
+            return
+
+        # 转换 uid->name
+        coros = [self._resolve_display_name_anywhere(event, int(gid), uid) for uid,_ in rows]
+        names = await asyncio.gather(*coros, return_exceptions=True)
+        rows_named = []
+        for (uid,cnt),nm in zip(rows,names):
+            nm = nm if isinstance(nm,str) else str(uid)
+            rows_named.append((nm,cnt))
+
+        fn = self._render_rank_image(title, rows_named)
+        if fn:
+            await event.bot.send_group_msg(group_id=int(gid), message=[{"type":"image","data":{"file":fn}}])
+        else:
+            text = title + "\n" + "\n".join([f"{i+1}. {nm} {cnt}" for i,(nm,cnt) in enumerate(rows_named)])
+            await event.bot.send_group_msg(group_id=int(gid), message=text)
+
+    async def _handle_my_stats(self, event: AstrMessageEvent):
+        gid = str(event.get_group_id())
+        uid = str(event.get_sender_id())
+        day = _today_str()
+        cnt = self.stats_data.get(day, {}).get(gid, {}).get(uid, 0)
+        name = await self._resolve_display_name_anywhere(event, int(gid), uid)
+        fn = self._render_my_today_card(name, uid, cnt)
+        if fn:
+            await event.bot.send_group_msg(group_id=int(gid), message=[{"type":"image","data":{"file":fn}}])
+        else:
+            await event.bot.send_group_msg(group_id=int(gid), message=f"{name} 今日已发送 {cnt} 条消息")
 
     # =========================================================
     # 娱乐功能：封杀倒计时（跳着撤回）+ 最终尝试禁言60秒
@@ -793,10 +1031,14 @@ class AutoRecallKeywordPlugin(Star):
         if getattr(event.message_obj.raw_message, 'post_type', '') == 'notice':
             return
 
+        # ---------- 获取基础信息 ----------
         group_id = event.get_group_id()
         sender_id = event.get_sender_id()
         message_str = event.message_str.strip()
         message_id = event.message_obj.message_id
+
+        # ---------- 新增：发言计数 ----------
+        self._bump_stats(group_id, sender_id)
 
         # ---------- 主人主动退群命令 ----------
         handled = await self.handle_owner_leave_group(event, message_str)
@@ -805,17 +1047,12 @@ class AutoRecallKeywordPlugin(Star):
 
         # ---------- 新增：我的身份（人人可查） ----------
         if message_str == "我的身份":
-            # 群内名称
             name = await self._get_group_display_name(event, int(group_id), int(sender_id))
-            # 角色身份
             role = await self._get_member_role(event, int(group_id), int(sender_id))
             role_cn = self._role_label(role)
-            # 权威认证
             auth = self.authority_cert.get(str(sender_id), "无名小辈")
-            # 时间
             ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
-            # 美化输出（卡片风格）
             text = (
                 "👑 我的身份\n"
                 "━━━━━━━━━\n"
@@ -905,6 +1142,17 @@ class AutoRecallKeywordPlugin(Star):
                         logger.error(f"自动回复失败: {e}")
                     break
 
+        # ---------- 新增：发言统计指令 ----------
+        if message_str == "发言日榜":
+            await self._handle_rank(event, mode="day")
+            return
+        if message_str == "发言周榜":
+            await self._handle_rank(event, mode="week")
+            return
+        if message_str == "我的发言":
+            await self._handle_my_stats(event)
+            return
+
         # ---------- 指令：查询违规 ----------
         if message_str.startswith("查询违规"):
             await self.handle_check_violation(event)
@@ -923,11 +1171,10 @@ class AutoRecallKeywordPlugin(Star):
             "加白", "移白", "白名单列表",
             "黑名单列表", "针对列表", "管理员列表",
             "封杀",
-            "认证", "移除认证",  # 新增：权威认证命令（仅主人）
-            "清空白名单",          # 新增：清空白名单
+            "认证", "移除认证",
+            "清空白名单",
         )
         if message_str.startswith(command_keywords):
-            # 特判：认证类命令放到 _is_operator 检查之前，因为它需要更严格（仅主人）
             if message_str.startswith("认证") or message_str.startswith("移除认证"):
                 await self.handle_certify(event)
                 return
@@ -951,7 +1198,7 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"获取用户 {sender_id} 群身份失败: {e}")
 
-        # ---------- 黑名单：发言触发兜底（只在当前群处理+撤回） ----------
+        # ---------- 黑名单兜底 ----------
         if str(sender_id) in self.kick_black_list:
             if await self._bot_is_admin(event, int(group_id)):
                 try:
@@ -961,7 +1208,6 @@ class AutoRecallKeywordPlugin(Star):
                         await event.bot.set_group_kick(group_id=int(group_id), user_id=int(sender_id))
                     await event.bot.send_group_msg(group_id=int(group_id), message=f"检测到黑名单用户 {sender_id}，已踢出！")
 
-                    # 新增：仅在当前群撤回其最近 N 条
                     try:
                         removed = await self._recall_recent_messages_of_user(event, int(group_id), str(sender_id), self.recall_on_kick_count)
                         if removed > 0:
@@ -1042,7 +1288,7 @@ class AutoRecallKeywordPlugin(Star):
                     await self.try_recall(event, message_id, group_id, sender_id)
                     return
 
-        # ---------- 刷屏检测（禁言 + 批量撤回） ----------
+        # ---------- 刷屏检测 ----------
         now = time.time()
         key = (group_id, sender_id)
         self.user_message_times[key].append(now)
@@ -1059,6 +1305,7 @@ class AutoRecallKeywordPlugin(Star):
                             logger.error(f"刷屏批量撤回失败: {e}")
                 self.user_message_times[key].clear()
                 self.user_message_ids[key].clear()
+
 
     # =========================================================
     # 撤回封装（输出失败原因/角色）
