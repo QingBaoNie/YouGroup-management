@@ -251,9 +251,7 @@ def _query_last_n_days_sum(self, group_id: int, n: int) -> dict[str, int]:
     except Exception as e:
         logger.error(f"[talk] 聚合失败 gid={group_id}: {e}")
     return res
-
 def _delete_group_talk_data(self, group_id: int):
-    """删除某群的统计目录（退群或被踢时调用）"""
     try:
         d = self._stats_dir_of(group_id)
         if os.path.isdir(d):
@@ -262,22 +260,22 @@ def _delete_group_talk_data(self, group_id: int):
     except Exception as e:
         logger.error(f"[talk] 删除群统计目录失败 gid={group_id}: {e}")
 
-    # =========================================================
-    # 工具函数：从本地 JSON 恢复（若存在）—— 仅名单类
-    # =========================================================
-    def _load_json_data(self):
-        try:
-            with open('cesn_data.json', 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            self.kick_black_list = set(data.get('kick_black_list', []))
-            self.target_user_list = set(data.get('target_user_list', []))
-            self.sub_admin_list = set(data.get('sub_admin_list', []))
-            self.whitelist = set(data.get('whitelist', []))
-            logger.info("已从 cesn_data.json 加载名单类数据")
-        except FileNotFoundError:
-            logger.info("首次运行：未发现 cesn_data.json，将在后续保存时创建。")
-        except Exception as e:
-            logger.error(f"读取 cesn_data.json 失败：{e}")
+# =========================================================
+# 工具函数：从本地 JSON 恢复（若存在）—— 仅名单类
+# =========================================================
+def _load_json_data(self):
+    try:
+        with open('cesn_data.json', 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        self.kick_black_list = set(data.get('kick_black_list', []))
+        self.target_user_list = set(data.get('target_user_list', []))
+        self.sub_admin_list = set(data.get('sub_admin_list', []))
+        self.whitelist = set(data.get('whitelist', []))
+        logger.info("已从 cesn_data.json 加载名单类数据")
+    except FileNotFoundError:
+        logger.info("首次运行：未发现 cesn_data.json，将在后续保存时创建。")
+    except Exception as e:
+        logger.error(f"读取 cesn_data.json 失败：{e}")
 
     # =========================================================
     # 新增：数据独立读写 + 旧数据迁移
