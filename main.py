@@ -351,8 +351,16 @@ class AutoRecallKeywordPlugin(Star):
     # 新增：绘图函数（移除自定义字体，强制使用 Pillow 内置默认字体）
     # =========================================================
     def _pick_font(self, size=32):
-        # 强制使用默认字体，避免乱码
-        return ImageFont.load_default()
+    try:
+        # Linux 常见中文字体路径
+        return ImageFont.truetype("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", size)
+    except Exception:
+        try:
+            # Windows 系统字体
+            return ImageFont.truetype("C:/Windows/Fonts/simhei.ttf", size)
+        except Exception:
+            return ImageFont.load_default()
+
 
     def _render_rank_image(self, title: str, rows: list[tuple[str, int]]) -> str:
         """生成排行榜图片，返回文件路径"""
