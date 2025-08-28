@@ -120,7 +120,7 @@ class AutoRecallKeywordPlugin(Star):
         self.auth_data_file = "auth_data.json"
 
         # ==== 新增：图片渲染配置（可被配置文件 image_config 覆盖）====
-        self.img_font_path = "fonts/NotoSansSC-Regular.otf"   # 第三方/Google 字体
+        self.img_font_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"   # 第三方/Google 字体
         self.img_save_dir  = "cache"                          # 缓存目录
         self.img_width     = 900
         self.img_row_height= 64
@@ -915,108 +915,118 @@ class AutoRecallKeywordPlugin(Star):
         img.save(fn)
         return fn
 
-    def _build_rank_html(self, title: str, rows: list[tuple[str, int]]) -> str:
-        items = "\n".join(
-            f"<tr><td>{i+1}</td><td>{name}</td><td>{cnt}</td></tr>"
-            for i, (name, cnt) in enumerate(rows)
-        )
-        css = """
-        <style>
-        @font-face{font-family:'NotoSC';src:local('Noto Sans CJK SC'),local('Noto Sans SC');}
-        *{margin:0;padding:0;box-sizing:border-box;}
-        body{font-family:'NotoSC','Microsoft YaHei',Arial; background:#f7f7f9; padding:24px;}
-        .card{width:900px; background:#fff; border-radius:16px; box-shadow:0 6px 18px rgba(0,0,0,.08); padding:24px;}
-        .title{font-size:22px; font-weight:700; margin-bottom:14px;}
-        table{width:100%; border-collapse:collapse; overflow:hidden; border-radius:12px;}
-        thead tr{background:#111827; color:#fff;}
-        th,td{padding:12px 14px; text-align:left; font-size:16px;}
-        tbody tr:nth-child(odd){background:#fafafa;}
-        tbody tr:nth-child(even){background:#f0f0f3;}
-        td:nth-child(1){width:72px; font-weight:700;}
-        td:nth-child(3){text-align:right; width:160px;}
-        .foot{margin-top:10px; color:#6b7280; font-size:12px;}
-        </style>
-        """
-        now = _now_local().strftime("%Y-%m-%d %H:%M:%S")
-        html = f"""<!doctype html><html><head><meta charset="utf-8">{css}</head>
-        <body><div class="card">
-          <div class="title">{title}</div>
-          <table>
-            <thead><tr><th>#</th><th>成员</th><th>消息数</th></tr></thead>
-            <tbody>{items}</tbody>
-          </table>
-          <div class="foot">生成时间：{now}</div>
-        </div></body></html>"""
-        return html
+def _build_rank_html(self, title: str, rows: list[tuple[str, int]]) -> str:
+    items = "\n".join(
+        f"<tr><td>{i+1}</td><td>{name}</td><td>{cnt}</td></tr>"
+        for i, (name, cnt) in enumerate(rows)
+    )
+    css = """
+    <style>
+    *{margin:0;padding:0;box-sizing:border-box;}
+    body{
+      font-family:"Noto Sans CJK SC","Noto Sans CJK","Microsoft YaHei","PingFang SC",
+                  "WenQuanYi Micro Hei","SimHei",Arial,sans-serif;
+      background:#f7f7f9; padding:24px;
+    }
+    .card{width:900px; background:#fff; border-radius:16px; box-shadow:0 6px 18px rgba(0,0,0,.08); padding:24px;}
+    .title{font-size:22px; font-weight:700; margin-bottom:14px;}
+    table{width:100%; border-collapse:collapse; overflow:hidden; border-radius:12px;}
+    thead tr{background:#111827; color:#fff;}
+    th,td{padding:12px 14px; text-align:left; font-size:16px;}
+    tbody tr:nth-child(odd){background:#fafafa;}
+    tbody tr:nth-child(even){background:#f0f0f3;}
+    td:nth-child(1){width:72px; font-weight:700;}
+    td:nth-child(3){text-align:right; width:160px;}
+    .foot{margin-top:10px; color:#6b7280; font-size:12px;}
+    </style>
+    """
+    now = _now_local().strftime("%Y-%m-%d %H:%M:%S")
+    html = f"""<!doctype html><html><head><meta charset="utf-8">{css}</head>
+    <body><div class="card">
+      <div class="title">{title}</div>
+      <table>
+        <thead><tr><th>#</th><th>成员</th><th>消息数</th></tr></thead>
+        <tbody>{items}</tbody>
+      </table>
+      <div class="foot">生成时间：{now}</div>
+    </div></body></html>"""
+    return html
 
-    def _build_mycard_html(self, name: str, uid: str, cnt: int) -> str:
-        css = """
-        <style>
-        body{margin:0;padding:24px;background:#f7f7f9;font-family:'Noto Sans CJK SC','Microsoft YaHei',Arial}
-        .card{width:900px;background:#fff;border-radius:16px;box-shadow:0 6px 18px rgba(0,0,0,.08);padding:28px}
-        .title{font-size:22px;font-weight:700;margin-bottom:18px}
-        .row{display:flex;gap:12px;margin:8px 0}
-        .key{width:120px;color:#6b7280}
-        .val{font-weight:600}
-        .foot{margin-top:12px;color:#6b7280;font-size:12px}
-        </style>
-        """
-        now = _now_local().strftime("%Y-%m-%d %H:%M:%S")
-        html = f"""<!doctype html><html><head><meta charset="utf-8">{css}</head>
-        <body><div class="card">
-          <div class="title">今日我的发言</div>
-          <div class="row"><div class="key">用户</div><div class="val">{name}</div></div>
-          <div class="row"><div class="key">QQ</div><div class="val">{uid}</div></div>
-          <div class="row"><div class="key">今日发言</div><div class="val">{cnt} 条</div></div>
-          <div class="foot">生成时间：{now}</div>
-        </div></body></html>"""
-        return html
 
-    def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
-        if not self.html_render_enable:
-            return None
-        _ensure_dir(self.img_save_dir)
-        out = os.path.join(self.img_save_dir, f"{out_prefix}_{int(time.time())}.png")
+def _build_mycard_html(self, name: str, uid: str, cnt: int) -> str:
+    css = """
+    <style>
+    body{
+      margin:0;padding:24px;background:#f7f7f9;
+      font-family:"Noto Sans CJK SC","Noto Sans CJK","Microsoft YaHei","PingFang SC",
+                   "WenQuanYi Micro Hei","SimHei",Arial,sans-serif;
+    }
+    .card{width:900px;background:#fff;border-radius:16px;box-shadow:0 6px 18px rgba(0,0,0,.08);padding:28px}
+    .title{font-size:22px;font-weight:700;margin-bottom:18px}
+    .row{display:flex;gap:12px;margin:8px 0}
+    .key{width:120px;color:#6b7280}
+    .val{font-weight:600}
+    .foot{margin-top:12px;color:#6b7280;font-size:12px}
+    </style>
+    """
+    now = _now_local().strftime("%Y-%m-%d %H:%M:%S")
+    html = f"""<!doctype html><html><head><meta charset="utf-8">{css}</head>
+    <body><div class="card">
+      <div class="title">今日我的发言</div>
+      <div class="row"><div class="key">用户</div><div class="val">{name}</div></div>
+      <div class="row"><div class="key">QQ</div><div class="val">{uid}</div></div>
+      <div class="row"><div class="key">今日发言</div><div class="val">{cnt} 条</div></div>
+      <div class="foot">生成时间：{now}</div>
+    </div></body></html>"""
+    return html
 
-        # 优先 imgkit + wkhtmltoimage
-        if IMGKIT_OK:
-            options = {
-                "format": "png",
-                "encoding": "utf-8",
-                "load-error-handling": "ignore",
-                "load-media-error-handling": "ignore",
-                "width": str(self.img_width),
-                "quality": "100",
-            }
-            if self.wkhtmltoimage_path:
-                try:
-                    cfg = imgkit.config(wkhtmltoimage=self.wkhtmltoimage_path)
-                except Exception:
-                    cfg = None
-            else:
-                try:
-                    cfg = imgkit.config()  # 系统 PATH
-                except Exception:
-                    cfg = None
-            try:
-                if cfg:
-                    imgkit.from_string(html, out, options=options, config=cfg)
-                    return out if os.path.exists(out) else None
-            except Exception as e:
-                logger.error(f"[HTML] imgkit 渲染失败: {e}")
 
-        # 退回 html2image（Chromium）
-        if H2I_OK:
-            try:
-                hti = Html2Image(output_path=self.img_save_dir)
-                fname = f"{out_prefix}_{int(time.time())}.png"
-                hti.screenshot(html_str=html, save_as=fname, size=(self.img_width, None))
-                path = os.path.join(self.img_save_dir, fname)
-                return path if os.path.exists(path) else None
-            except Exception as e:
-                logger.error(f"[HTML] html2image 渲染失败: {e}")
-
+def _html_to_image(self, html: str, out_prefix: str = "htmlcard") -> str | None:
+    if not self.html_render_enable:
         return None
+    _ensure_dir(self.img_save_dir)
+    out = os.path.join(self.img_save_dir, f"{out_prefix}_{int(time.time())}.png")
+
+    # 优先 imgkit + wkhtmltoimage
+    if IMGKIT_OK:
+        options = {
+            "format": "png",
+            "encoding": "utf-8",
+            "width": str(self.img_width),   # 900
+            "quality": "100",
+            "disable-smart-shrinking": "",  # 禁止自动缩小，避免糊
+            "dpi": "192",                   # 144~300 都可以，越大越清晰
+            "zoom": "2",                    # 放大渲染，文字更锐利
+            "enable-local-file-access": ""  # 如有本地资源时需要
+        }
+
+        # 明确路径（优先配置项，其次默认 /usr/bin/wkhtmltoimage）
+        wk_path = (self.wkhtmltoimage_path or "/usr/bin/wkhtmltoimage")
+        try:
+            cfg = imgkit.config(wkhtmltoimage=wk_path)
+        except Exception:
+            cfg = None
+
+        try:
+            if cfg:
+                imgkit.from_string(html, out, options=options, config=cfg)
+                return out if os.path.exists(out) else None
+        except Exception as e:
+            logger.error(f"[HTML] imgkit 渲染失败: {e}")
+
+    # 退回 html2image
+    if H2I_OK:
+        try:
+            hti = Html2Image(output_path=self.img_save_dir)
+            fname = f"{out_prefix}_{int(time.time())}.png"
+            hti.screenshot(html_str=html, save_as=fname, size=(self.img_width, None))
+            path = os.path.join(self.img_save_dir, fname)
+            return path if os.path.exists(path) else None
+        except Exception as e:
+            logger.error(f"[HTML] html2image 渲染失败: {e}")
+
+    return None
+
 
     def _to_cq_image_base64(self, path: str) -> str | None:
         try:
