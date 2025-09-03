@@ -299,7 +299,7 @@ class AutoRecallKeywordPlugin(Star):
         font_title  = self._load_font(44)             or ImageFont.load_default()
         font_header = self._load_font(30)             or ImageFont.load_default()
         font_uid    = self._load_font(28)             or ImageFont.load_default()
-        font_name   = self._load_font(28, emoji=True) or ImageFont.load_default()
+        font_name   = self._load_font(28) or ImageFont.load_default()
 
         bg = (250, 250, 252)
         fg = (33, 37, 41)
