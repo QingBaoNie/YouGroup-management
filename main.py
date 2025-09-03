@@ -1734,37 +1734,25 @@ async def _send_id_list_image(self, event: AstrMessageEvent, group_id: int, titl
         if msg.startswith("白名单列表"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 白名单列表")
-            items = list(self.whitelist)
-            lines = await self._format_id_list_with_names(event, int(group_id), items)
-            text = "以下为 白名单QQ 总计{}\n{}".format(len(items), ("\n".join(lines) if lines else "（空）"))
-            await self._safe_send_group_msg(event.bot, group_id, text)
+            await self._send_id_list_image(event, int(group_id), "白名单列表", self.whitelist)
             return
 
         if msg.startswith("黑名单列表"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 黑名单列表")
-            items = list(self.kick_black_list)
-            lines = await self._format_id_list_with_names(event, int(group_id), items)
-            text = "以下为 黑名单QQ 总计{}\n{}".format(len(items), ("\n".join(lines) if lines else "（空）"))
-            await self._safe_send_group_msg(event.bot, group_id, text)
+            await self._send_id_list_image(event, int(group_id), "黑名单列表", self.kick_black_list)
             return
 
         if msg.startswith("针对列表"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 针对列表")
-            items = list(self.target_user_list)
-            lines = await self._format_id_list_with_names(event, int(group_id), items)
-            text = "以下为 针对名单QQ 总计{}\n{}".format(len(items), ("\n".join(lines) if lines else "（空）"))
-            await self._safe_send_group_msg(event.bot, group_id, text)
+            await self._send_id_list_image(event, int(group_id), "针对名单", self.target_user_list)
             return
 
         if msg.startswith("管理员列表"):
             if hasattr(event, "mark_action"):
                 event.mark_action("敏感词插件 - 管理员列表")
-            items = list(self.sub_admin_list)
-            lines = await self._format_id_list_with_names(event, int(group_id), items)
-            text = "以下为 子管理员QQ 总计{}\n{}".format(len(items), ("\n".join(lines) if lines else "（空）"))
-            await self._safe_send_group_msg(event.bot, group_id, text)
+            await self._send_id_list_image(event, int(group_id), "子管理员列表", self.sub_admin_list)
             return
 
         # 需要目标QQ的命令：支持 @ 与 #QQ号
