@@ -386,36 +386,56 @@ class AutoRecallKeywordPlugin(Star):
 
         return pages
 
-    async def _send_id_list_image(self, event: AstrMessageEvent, group_id: int, title: str, id_set: set[str]):
+async def _send_id_list_image(self, event: AstrMessageEvent, group_id: int, title: str, id_set: set[str]):
+    try:
+        ids = sorted(id_set, key=lambda x: int(x))
+    except Exception:
+        ids = sorted(id_set)
+
+    # Pillow 不可用：直接文本回退
+    if Image is None:
+        lines = await self._format_id_list_with_names(event, int(group_id), ids)
+        text = f"{title}（文本回退） 总计{len(ids)}\n" + ("\n".join(lines) if lines else "（空）")
+        await self._safe_send_group_msg(event.bot, group_id, text)
+        return
+
+    # 先构建图片
+    rows = await self._build_rows_uid_and_name(event, int(group_id), ids)
+    paths = self._render_table_images(title, rows)
+
+    # 渲染失败：文本回退
+    if not paths:
+        lines = await self._format_id_list_with_names(event, int(group_id), ids)
+        text = f"{title} 总计{len(ids)}\n" + ("\n".join(lines) if lines else "（空）")
+        await self._safe_send_group_msg(event.bot, group_id, text)
+        return
+
+    # 尝试逐张发送图片；若全部失败则文本回退
+    sent_any = False
+    for p in paths:
         try:
-            ids = sorted(id_set, key=lambda x: int(x))
-        except Exception:
-            ids = sorted(id_set)
+            # 确保文件存在
+            img_path = Path(p).resolve()
+            if not img_path.exists():
+                logger.error(f"发送图片失败：文件不存在 {img_path}")
+                continue
 
-        if Image is None:
-            lines = await self._format_id_list_with_names(event, int(group_id), ids)
-            text = f"{title}（文本回退） 总计{len(ids)}\n" + ("\n".join(lines) if lines else "（空）")
-            await self._safe_send_group_msg(event.bot, group_id, text)
-            return
+            # 生成标准 file URI（例如 file:///AstrBot/list_xxx.png）
+            uri = img_path.as_uri()
+            await event.bot.send_group_msg(
+                group_id=int(group_id),
+                message=[{"type": "image", "data": {"file": uri}}]
+            )
+            sent_any = True
+        except Exception as e:
+            logger.error(f"发送图片失败 {p}: {e}")
 
-        rows = await self._build_rows_uid_and_name(event, int(group_id), ids)
-        paths = self._render_table_images(title, rows)
+    # 全部发送失败 → 文本回退
+    if not sent_any:
+        lines = await self._format_id_list_with_names(event, int(group_id), ids)
+        text = f"{title}（图片发送失败，改为文本） 总计{len(ids)}\n" + ("\n".join(lines) if lines else "（空）")
+        await self._safe_send_group_msg(event.bot, group_id, text)
 
-        if not paths:
-            lines = await self._format_id_list_with_names(event, int(group_id), ids)
-            text = f"{title} 总计{len(ids)}\n" + ("\n".join(lines) if lines else "（空）")
-            await self._safe_send_group_msg(event.bot, group_id, text)
-            return
-
-        for p in paths:
-            try:
-                abspath = os.path.abspath(p)
-                await event.bot.send_group_msg(
-                    group_id=int(group_id),
-                    message=[{"type": "image", "data": {"file": f"file:///{abspath}"}}]
-                )
-            except Exception as e:
-                logger.error(f"发送图片失败 {p}: {e}")
 
     # =========================================================
     # 安全封装：统一 CQHTTP 调用
