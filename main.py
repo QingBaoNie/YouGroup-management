@@ -400,7 +400,7 @@ def _render_table_images(self, title: str, rows: list[tuple[str, str]]) -> list[
             y += row_height
 
         # === 底部版权 ===
-        copyright_text = "© 2025 YouGroup-management"
+        copyright_text = "© 2025 忧"
         cw = text_width(copyright_text, font_copy)
         cx = (width - cw) // 2
         cy = height - font_copy.size - 10
