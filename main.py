@@ -7,6 +7,7 @@ from collections import defaultdict, deque
 from pathlib import Path
 import os
 import base64
+from io import BytesIO
 from astrbot import logger
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import filter
@@ -278,114 +279,124 @@ class AutoRecallKeywordPlugin(Star):
             rows.append((str(uid), name))
         return rows
 
-    def _render_table_images(self, title: str, rows: list[tuple[str, str]]) -> list[str]:
-        if Image is None:
-            return []
-        width = 1080
-        max_height = 2200
-        padding_lr = 48
-        padding_tb = 40
-        title_gap = 24
-        header_gap = 18
-        row_height = 56
-        header_height = 60
-        border = 2
+def _render_table_images(self, title: str, rows: list[tuple[str, str]]) -> list[bytes]:
+    """渲染表格，返回每页 PNG 字节流"""
+    if Image is None:
+        return []
 
-        font_title  = self._load_font(44)             or ImageFont.load_default()
-        font_header = self._load_font(30)             or ImageFont.load_default()
-        font_uid    = self._load_font(28)             or ImageFont.load_default()
-        font_name   = self._load_font(28, emoji=True) or ImageFont.load_default()
+    width = 1080
+    max_height = 2200
+    padding_lr = 48
+    padding_tb = 40
+    title_gap = 24
+    header_gap = 18
+    row_height = 56
+    header_height = 60
+    border = 2
 
-        bg = (250, 250, 252)
-        fg = (33, 37, 41)
-        grid = (220, 224, 230)
-        header_bg = (235, 238, 243)
-        zebra = [(255,255,255),(245,248,252),(252,245,248),(245,252,247)]
+    font_title  = self._load_font(44)             or ImageFont.load_default()
+    font_header = self._load_font(30)             or ImageFont.load_default()
+    font_uid    = self._load_font(28)             or ImageFont.load_default()
+    font_name   = self._load_font(28, emoji=True) or ImageFont.load_default()
 
-        def text_width(s: str, font) -> int:
+    bg = (250, 250, 252)
+    fg = (33, 37, 41)
+    grid = (220, 224, 230)
+    header_bg = (235, 238, 243)
+    zebra = [
+        (255, 255, 255),
+        (245, 248, 252),
+        (252, 245, 248),
+        (245, 252, 247),
+    ]
+
+    def text_width(s: str, font) -> int:
+        if hasattr(font, "getlength"):
+            return int(font.getlength(s))
+        return font.getsize(s)[0]
+
+    sample_uid = max((uid for uid, _ in rows), key=len, default="123456789012")
+    uid_w   = text_width(sample_uid, font_uid) + 40
+    title_w = text_width(title, font_title)
+    uid_col_w  = min(380, max(260, uid_w))
+    name_col_w = width - padding_lr * 2 - uid_col_w
+
+    static_area = padding_tb + header_height + header_gap + title_gap + padding_tb + font_title.size + 6
+    max_rows_per_page = max(1, (max_height - static_area) // row_height)
+
+    pages = []
+    if not rows:
+        rows = [("（空）", "（无数据）")]
+
+    for start in range(0, len(rows), max_rows_per_page):
+        subset = rows[start:start + max_rows_per_page]
+        height = (
+            padding_tb + font_title.size + 6 + title_gap +
+            header_height + header_gap + len(subset) * row_height +
+            padding_tb + border
+        )
+        img = Image.new("RGB", (width, height), bg)
+        draw = ImageDraw.Draw(img)
+
+        # 标题
+        title_x = (width - title_w) // 2 if title_w < (width - padding_lr * 2) else padding_lr
+        title_y = padding_tb
+        draw.text((title_x, title_y), title, font=font_title, fill=fg)
+
+        table_x = padding_lr
+        table_top = title_y + font_title.size + 6 + title_gap
+        table_bottom = table_top + header_height + header_gap + len(subset) * row_height
+
+        draw.rectangle([table_x - border, table_top - border, width - padding_lr + border, table_bottom + border],
+                       outline=grid, width=border)
+
+        header_rect = [table_x, table_top, width - padding_lr, table_top + header_height]
+        draw.rectangle(header_rect, fill=header_bg)
+
+        draw.line([table_x + uid_col_w, table_top, table_x + uid_col_w,
+                   table_top + header_height + header_gap + len(subset)*row_height], fill=grid, width=1)
+
+        hpad = 16
+        draw.text((table_x + hpad, table_top + (header_height - font_header.size)//2),
+                  "QQ号", font=font_header, fill=fg)
+        draw.text((table_x + uid_col_w + hpad, table_top + (header_height - font_header.size)//2),
+                  "名称", font=font_header, fill=fg)
+
+        def ellipsis(text: str, max_w: int, font) -> str:
+            if not text:
+                return text
             if hasattr(font, "getlength"):
-                return int(font.getlength(s))
-            return font.getsize(s)[0]
-
-        sample_uid = max((uid for uid, _ in rows), key=len, default="123456789012")
-        uid_w   = text_width(sample_uid, font_uid) + 40
-        title_w = text_width(title, font_title)
-        uid_col_w  = min(380, max(260, uid_w))
-        name_col_w = width - padding_lr * 2 - uid_col_w
-
-        static_area = padding_tb + header_height + header_gap + title_gap + padding_tb + font_title.size + 6
-        max_rows_per_page = max(1, (max_height - static_area) // row_height)
-
-        pages = []
-        if not rows:
-            rows = [("（空）", "（无数据）")]
-
-        for page_idx, start in enumerate(range(0, len(rows), max_rows_per_page)):
-            subset = rows[start:start + max_rows_per_page]
-            height = (
-                padding_tb + font_title.size + 6 + title_gap +
-                header_height + header_gap + len(subset) * row_height +
-                padding_tb + border
-            )
-            img = Image.new("RGB", (width, height), bg)
-            draw = ImageDraw.Draw(img)
-
-            title_x = (width - title_w) // 2 if title_w < (width - padding_lr * 2) else padding_lr
-            title_y = padding_tb
-            draw.text((title_x, title_y), title, font=font_title, fill=fg)
-
-            table_x = padding_lr
-            table_top = title_y + font_title.size + 6 + title_gap
-
-            draw.rectangle([table_x - border, table_top - border, width - padding_lr + border,
-                            table_top + header_height + header_gap + len(subset)*row_height + border],
-                           outline=grid, width=border)
-
-            header_rect = [table_x, table_top, width - padding_lr, table_top + header_height]
-            draw.rectangle(header_rect, fill=header_bg)
-
-            draw.line([table_x + uid_col_w, table_top, table_x + uid_col_w,
-                       table_top + header_height + header_gap + len(subset)*row_height], fill=grid, width=1)
-
-            hpad = 16
-            draw.text((table_x + hpad, table_top + (header_height - font_header.size)//2),
-                      "QQ号", font=font_header, fill=fg)
-            draw.text((table_x + uid_col_w + hpad, table_top + (header_height - font_header.size)//2),
-                      "名称", font=font_header, fill=fg)
-
-            def ellipsis(text: str, max_w: int, font) -> str:
-                if not text:
+                if font.getlength(text) <= max_w:
                     return text
-                if hasattr(font, "getlength"):
-                    if font.getlength(text) <= max_w:
-                        return text
-                    ell = "..."
-                    while text and font.getlength(text + ell) > max_w:
-                        text = text[:-1]
-                    return text + ell if text else ell
-                else:
-                    if font.getsize(text)[0] <= max_w:
-                        return text
-                    ell = "..."
-                    while text and font.getsize(text + ell)[0] > max_w:
-                        text = text[:-1]
-                    return text + ell if text else ell
+                ell = "..."
+                while text and font.getlength(text + ell) > max_w:
+                    text = text[:-1]
+                return text + ell if text else ell
+            else:
+                if font.getsize(text)[0] <= max_w:
+                    return text
+                ell = "..."
+                while text and font.getsize(text + ell)[0] > max_w:
+                    text = text[:-1]
+                return text + ell if text else ell
 
-            y = table_top + header_height + header_gap
-            for i, (uid, name) in enumerate(subset):
-                row_rect = [table_x, y, width - padding_lr, y + row_height]
-                draw.rectangle(row_rect, fill=zebra[i % len(zebra)])
-                uid_text  = ellipsis(uid,  uid_col_w  - hpad*2, font_uid)
-                name_text = ellipsis(name, name_col_w - hpad*2, font_name)
-                draw.text((table_x + hpad, y + (row_height - font_uid.size)//2), uid_text, font=font_uid, fill=fg)
-                draw.text((table_x + uid_col_w + hpad, y + (row_height - font_name.size)//2), name_text, font=font_name, fill=fg)
-                y += row_height
+        y = table_top + header_height + header_gap
+        for i, (uid, name) in enumerate(subset):
+            row_rect = [table_x, y, width - padding_lr, y + row_height]
+            draw.rectangle(row_rect, fill=zebra[i % len(zebra)])
+            uid_text  = ellipsis(uid,  uid_col_w  - hpad*2, font_uid)
+            name_text = ellipsis(name, name_col_w - hpad*2, font_name)
+            draw.text((table_x + hpad, y + (row_height - font_uid.size)//2),
+                      uid_text, font=font_uid, fill=fg)
+            draw.text((table_x + uid_col_w + hpad, y + (row_height - font_name.size)//2),
+                      name_text, font=font_name, fill=fg)
+            y += row_height
 
-            fn = f"list_{int(time.time()*1000)}_{page_idx+1}.png"
-            img.save(fn, format="PNG")
-            pages.append(fn)
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        pages.append(buf.getvalue())
 
-        return pages
+    return pages
 
 async def _send_id_list_image(self, event: AstrMessageEvent, group_id: int, title: str, id_set: set[str]):
     try:
@@ -393,48 +404,28 @@ async def _send_id_list_image(self, event: AstrMessageEvent, group_id: int, titl
     except Exception:
         ids = sorted(id_set)
 
-    # Pillow 不可用：直接文本回退
     if Image is None:
         lines = await self._format_id_list_with_names(event, int(group_id), ids)
         text = f"{title}（文本回退） 总计{len(ids)}\n" + ("\n".join(lines) if lines else "（空）")
         await self._safe_send_group_msg(event.bot, group_id, text)
         return
 
-    # 构建图片
     rows = await self._build_rows_uid_and_name(event, int(group_id), ids)
-    paths = self._render_table_images(title, rows)
+    images = self._render_table_images(title, rows)
 
-    if not paths:  # 渲染失败
+    if not images:
         lines = await self._format_id_list_with_names(event, int(group_id), ids)
         text = f"{title} 总计{len(ids)}\n" + ("\n".join(lines) if lines else "（空）")
         await self._safe_send_group_msg(event.bot, group_id, text)
         return
 
-    sent_any = False
-    for p in paths:
-        try:
-            img_path = Path(p).resolve()
-            if not img_path.exists():
-                logger.error(f"发送图片失败：文件不存在 {img_path}")
-                continue
+    for img_bytes in images:
+        b64 = base64.b64encode(img_bytes).decode()
+        await event.bot.send_group_msg(
+            group_id=int(group_id),
+            message=[{"type": "image", "data": {"file": f"base64://{b64}"}}]
+        )
 
-            # 读取并转 base64
-            with open(img_path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode()
-
-            await event.bot.send_group_msg(
-                group_id=int(group_id),
-                message=[{"type": "image", "data": {"file": f"base64://{b64}"}}]
-            )
-            sent_any = True
-        except Exception as e:
-            logger.error(f"发送图片失败 {p}: {e}")
-
-    # 如果所有图片都没成功，文本回退
-    if not sent_any:
-        lines = await self._format_id_list_with_names(event, int(group_id), ids)
-        text = f"{title}（图片发送失败，文本回退） 总计{len(ids)}\n" + ("\n".join(lines) if lines else "（空）")
-        await self._safe_send_group_msg(event.bot, group_id, text)
 
     # =========================================================
     # 安全封装：统一 CQHTTP 调用
