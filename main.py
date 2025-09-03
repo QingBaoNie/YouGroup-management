@@ -256,7 +256,7 @@ class AutoRecallKeywordPlugin(Star):
             json.dump(data, f, ensure_ascii=False, indent=2)
         logger.info("已保存名单类数据到 cesn_data.json")
     # =========================================================
-    # 图片渲染工具：表格（大标题 / 斑马条 / 自动分页）
+    # 图片渲染工具：表格（大标题 / 随机底色 / 自动分页）
     # =========================================================
     def _load_font(self, size: int, emoji: bool = False):
         if ImageFont is None:
@@ -282,135 +282,135 @@ class AutoRecallKeywordPlugin(Star):
             rows.append((str(uid), name))
         return rows
 
-def _render_table_images(self, title: str, rows: list[tuple[str, str]]) -> list[bytes]:
-    """渲染表格，返回每页 PNG 字节流"""
-    if Image is None:
-        return []
+    def _render_table_images(self, title: str, rows: list[tuple[str, str]]) -> list[bytes]:
+        """渲染表格，返回每页 PNG 字节流"""
+        if Image is None:
+            return []
 
-    width = 1080
-    max_height = 2200
-    padding_lr = 48
-    padding_tb = 40
-    title_gap = 24
-    header_gap = 18
-    row_height = 56
-    header_height = 60
-    border = 2
+        width = 1080
+        max_height = 2200
+        padding_lr = 48
+        padding_tb = 40
+        title_gap = 24
+        header_gap = 18
+        row_height = 56
+        header_height = 60
+        border = 2
 
-    font_title  = self._load_font(44)             or ImageFont.load_default()
-    font_header = self._load_font(30)             or ImageFont.load_default()
-    font_uid    = self._load_font(28)             or ImageFont.load_default()
-    font_name   = self._load_font(28) or ImageFont.load_default()
-    font_copy   = self._load_font(22)             or ImageFont.load_default()  # 版权小字
+        font_title  = self._load_font(44)             or ImageFont.load_default()
+        font_header = self._load_font(30)             or ImageFont.load_default()
+        font_uid    = self._load_font(28)             or ImageFont.load_default()
+        font_name   = self._load_font(28) or ImageFont.load_default()
+        font_copy   = self._load_font(22)             or ImageFont.load_default()  # 版权小字
 
-    bg = (250, 250, 252)
-    fg = (33, 37, 41)
-    grid = (220, 224, 230)
-    header_bg = (235, 238, 243)
+        bg = (250, 250, 252)
+        fg = (33, 37, 41)
+        grid = (220, 224, 230)
+        header_bg = (235, 238, 243)
 
-    def text_width(s: str, font) -> int:
-        if hasattr(font, "getlength"):
-            return int(font.getlength(s))
-        return font.getsize(s)[0]
-
-    sample_uid = max((uid for uid, _ in rows), key=len, default="123456789012")
-    uid_w   = text_width(sample_uid, font_uid) + 40
-    title_w = text_width(title, font_title)
-    uid_col_w  = min(380, max(260, uid_w))
-    name_col_w = width - padding_lr * 2 - uid_col_w
-
-    static_area = padding_tb + header_height + header_gap + title_gap + padding_tb + font_title.size + 6
-    max_rows_per_page = max(1, (max_height - static_area) // row_height)
-
-    pages = []
-    if not rows:
-        rows = [("（空）", "（无数据）")]
-
-    for start in range(0, len(rows), max_rows_per_page):
-        subset = rows[start:start + max_rows_per_page]
-        height = (
-            padding_tb + font_title.size + 6 + title_gap +
-            header_height + header_gap + len(subset) * row_height +
-            padding_tb + border + 40  # 额外给版权留点空间
-        )
-        img = Image.new("RGB", (width, height), bg)
-        draw = ImageDraw.Draw(img)
-
-        # 标题
-        title_x = (width - title_w) // 2 if title_w < (width - padding_lr * 2) else padding_lr
-        title_y = padding_tb
-        draw.text((title_x, title_y), title, font=font_title, fill=fg)
-
-        table_x = padding_lr
-        table_top = title_y + font_title.size + 6 + title_gap
-        table_bottom = table_top + header_height + header_gap + len(subset) * row_height
-
-        draw.rectangle([table_x - border, table_top - border,
-                        width - padding_lr + border, table_bottom + border],
-                       outline=grid, width=border)
-
-        header_rect = [table_x, table_top, width - padding_lr, table_top + header_height]
-        draw.rectangle(header_rect, fill=header_bg)
-
-        draw.line([table_x + uid_col_w, table_top,
-                   table_x + uid_col_w,
-                   table_top + header_height + header_gap + len(subset) * row_height],
-                  fill=grid, width=1)
-
-        hpad = 16
-        draw.text((table_x + hpad, table_top + (header_height - font_header.size)//2),
-                  "QQ号", font=font_header, fill=fg)
-        draw.text((table_x + uid_col_w + hpad, table_top + (header_height - font_header.size)//2),
-                  "名称", font=font_header, fill=fg)
-
-        def ellipsis(text: str, max_w: int, font) -> str:
-            if not text:
-                return text
+        def text_width(s: str, font) -> int:
             if hasattr(font, "getlength"):
-                if font.getlength(text) <= max_w:
-                    return text
-                ell = "..."
-                while text and font.getlength(text + ell) > max_w:
-                    text = text[:-1]
-                return text + ell if text else ell
-            else:
-                if font.getsize(text)[0] <= max_w:
-                    return text
-                ell = "..."
-                while text and font.getsize(text + ell)[0] > max_w:
-                    text = text[:-1]
-                return text + ell if text else ell
+                return int(font.getlength(s))
+            return font.getsize(s)[0]
 
-        y = table_top + header_height + header_gap
-        for uid, name in subset:
-            row_rect = [table_x, y, width - padding_lr, y + row_height]
-            # 🎨 每一行生成一个随机浅色
-            row_color = (
-                random.randint(220, 255),
-                random.randint(220, 255),
-                random.randint(220, 255),
+        sample_uid = max((uid for uid, _ in rows), key=len, default="123456789012")
+        uid_w   = text_width(sample_uid, font_uid) + 40
+        title_w = text_width(title, font_title)
+        uid_col_w  = min(380, max(260, uid_w))
+        name_col_w = width - padding_lr * 2 - uid_col_w
+
+        static_area = padding_tb + header_height + header_gap + title_gap + padding_tb + font_title.size + 6
+        max_rows_per_page = max(1, (max_height - static_area) // row_height)
+
+        pages = []
+        if not rows:
+            rows = [("（空）", "（无数据）")]
+
+        for start in range(0, len(rows), max_rows_per_page):
+            subset = rows[start:start + max_rows_per_page]
+            height = (
+                padding_tb + font_title.size + 6 + title_gap +
+                header_height + header_gap + len(subset) * row_height +
+                padding_tb + border + 40  # 额外给版权留点空间
             )
-            draw.rectangle(row_rect, fill=row_color)
-            uid_text  = ellipsis(uid,  uid_col_w  - hpad*2, font_uid)
-            name_text = ellipsis(name, name_col_w - hpad*2, font_name)
-            draw.text((table_x + hpad, y + (row_height - font_uid.size)//2),
-                      uid_text, font=font_uid, fill=fg)
-            draw.text((table_x + uid_col_w + hpad, y + (row_height - font_name.size)//2),
-                      name_text, font=font_name, fill=fg)
-            y += row_height
+            img = Image.new("RGB", (width, height), bg)
+            draw = ImageDraw.Draw(img)
 
-        # === 底部版权 ===
-        copyright_text = "© 2025 忧"
-        cw = text_width(copyright_text, font_copy)
-        cx = (width - cw) // 2
-        cy = height - font_copy.size - 10
-        draw.text((cx, cy), copyright_text, font=font_copy, fill=(120, 120, 120))
+            # 标题
+            title_x = (width - title_w) // 2 if title_w < (width - padding_lr * 2) else padding_lr
+            title_y = padding_tb
+            draw.text((title_x, title_y), title, font=font_title, fill=fg)
 
-        buf = BytesIO()
-        img.save(buf, format="PNG")
-        pages.append(buf.getvalue())
+            table_x = padding_lr
+            table_top = title_y + font_title.size + 6 + title_gap
+            table_bottom = table_top + header_height + header_gap + len(subset) * row_height
 
-    return pages
+            draw.rectangle([table_x - border, table_top - border,
+                            width - padding_lr + border, table_bottom + border],
+                           outline=grid, width=border)
+
+            header_rect = [table_x, table_top, width - padding_lr, table_top + header_height]
+            draw.rectangle(header_rect, fill=header_bg)
+
+            draw.line([table_x + uid_col_w, table_top,
+                       table_x + uid_col_w,
+                       table_top + header_height + header_gap + len(subset) * row_height],
+                      fill=grid, width=1)
+
+            hpad = 16
+            draw.text((table_x + hpad, table_top + (header_height - font_header.size)//2),
+                      "QQ号", font=font_header, fill=fg)
+            draw.text((table_x + uid_col_w + hpad, table_top + (header_height - font_header.size)//2),
+                      "名称", font=font_header, fill=fg)
+
+            def ellipsis(text: str, max_w: int, font) -> str:
+                if not text:
+                    return text
+                if hasattr(font, "getlength"):
+                    if font.getlength(text) <= max_w:
+                        return text
+                    ell = "..."
+                    while text and font.getlength(text + ell) > max_w:
+                        text = text[:-1]
+                    return text + ell if text else ell
+                else:
+                    if font.getsize(text)[0] <= max_w:
+                        return text
+                    ell = "..."
+                    while text and font.getsize(text + ell)[0] > max_w:
+                        text = text[:-1]
+                    return text + ell if text else ell
+
+            y = table_top + header_height + header_gap
+            for uid, name in subset:
+                row_rect = [table_x, y, width - padding_lr, y + row_height]
+                row_color = (
+                    random.randint(220, 255),
+                    random.randint(220, 255),
+                    random.randint(220, 255),
+                )
+                draw.rectangle(row_rect, fill=row_color)
+                uid_text  = ellipsis(uid,  uid_col_w  - hpad*2, font_uid)
+                name_text = ellipsis(name, name_col_w - hpad*2, font_name)
+                draw.text((table_x + hpad, y + (row_height - font_uid.size)//2),
+                          uid_text, font=font_uid, fill=fg)
+                draw.text((table_x + uid_col_w + hpad, y + (row_height - font_name.size)//2),
+                          name_text, font=font_name, fill=fg)
+                y += row_height
+
+            # === 底部版权 ===
+            copyright_text = "© 2025 忧"
+            cw = text_width(copyright_text, font_copy)
+            cx = (width - cw) // 2
+            cy = height - font_copy.size - 10
+            draw.text((cx, cy), copyright_text, font=font_copy, fill=(120, 120, 120))
+
+            buf = BytesIO()
+            img.save(buf, format="PNG")
+            pages.append(buf.getvalue())
+
+        return pages
+
     async def _send_id_list_image(
         self, event: AstrMessageEvent, group_id: int, title: str, id_set: set[str]
     ):
@@ -440,6 +440,7 @@ def _render_table_images(self, title: str, rows: list[tuple[str, str]]) -> list[
                 group_id=int(group_id),
                 message=[{"type": "image", "data": {"file": f"base64://{b64}"}}]
             )
+
     # =========================================================
     # 安全封装：统一 CQHTTP 调用
     # =========================================================
