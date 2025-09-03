@@ -239,8 +239,19 @@ class AutoRecallKeywordPlugin(Star):
             logger.info(f"已保存认证数据到 {self.auth_data_file}")
         except Exception as e:
             logger.error(f"保存 {self.auth_data_file} 失败：{e}")
-
-
+    # =========================================================
+    # 工具函数：将内存数据保存到本地（名单类）
+    # =========================================================
+    def save_json_data(self):
+        data = {
+            'kick_black_list': list(self.kick_black_list),
+            'target_user_list': list(self.target_user_list),
+            'sub_admin_list': list(self.sub_admin_list),
+            'whitelist': list(self.whitelist),
+        }
+        with open('cesn_data.json', 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        logger.info("已保存名单类数据到 cesn_data.json")
 # =========================================================
 # 图片渲染工具：表格（大标题 / 斑马条 / 自动分页）
 # =========================================================
@@ -413,20 +424,6 @@ async def _send_id_list_image(self, event: AstrMessageEvent, group_id: int, titl
         except Exception as e:
             logger.error(f"发送图片失败 {p}: {e}")
 
-
-    # =========================================================
-    # 工具函数：将内存数据保存到本地（名单类）
-    # =========================================================
-    def save_json_data(self):
-        data = {
-            'kick_black_list': list(self.kick_black_list),
-            'target_user_list': list(self.target_user_list),
-            'sub_admin_list': list(self.sub_admin_list),
-            'whitelist': list(self.whitelist),
-        }
-        with open('cesn_data.json', 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        logger.info("已保存名单类数据到 cesn_data.json")
     async def _safe_call(self, bot, action: str, **params):
         """统一调用 API，失败时只打日志不抛异常"""
         try:
