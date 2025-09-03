@@ -6,6 +6,7 @@ import asyncio
 from collections import defaultdict, deque
 from pathlib import Path
 import os
+import random
 import base64
 from io import BytesIO
 from astrbot import logger
@@ -306,12 +307,6 @@ def _render_table_images(self, title: str, rows: list[tuple[str, str]]) -> list[
     fg = (33, 37, 41)
     grid = (220, 224, 230)
     header_bg = (235, 238, 243)
-    zebra = [
-        (255, 255, 255),
-        (245, 248, 252),
-        (252, 245, 248),
-        (245, 252, 247),
-    ]
 
     def text_width(s: str, font) -> int:
         if hasattr(font, "getlength"):
@@ -387,9 +382,15 @@ def _render_table_images(self, title: str, rows: list[tuple[str, str]]) -> list[
                 return text + ell if text else ell
 
         y = table_top + header_height + header_gap
-        for i, (uid, name) in enumerate(subset):
+        for uid, name in subset:
             row_rect = [table_x, y, width - padding_lr, y + row_height]
-            draw.rectangle(row_rect, fill=zebra[i % len(zebra)])
+            # 🎨 每一行生成一个随机浅色
+            row_color = (
+                random.randint(220, 255),
+                random.randint(220, 255),
+                random.randint(220, 255),
+            )
+            draw.rectangle(row_rect, fill=row_color)
             uid_text  = ellipsis(uid,  uid_col_w  - hpad*2, font_uid)
             name_text = ellipsis(name, name_col_w - hpad*2, font_name)
             draw.text((table_x + hpad, y + (row_height - font_uid.size)//2),
@@ -398,8 +399,8 @@ def _render_table_images(self, title: str, rows: list[tuple[str, str]]) -> list[
                       name_text, font=font_name, fill=fg)
             y += row_height
 
-        # === 新增：底部版权 ===
-        copyright_text = "© 2025 忧"
+        # === 底部版权 ===
+        copyright_text = "© 2025 YouGroup-management"
         cw = text_width(copyright_text, font_copy)
         cx = (width - cw) // 2
         cy = height - font_copy.size - 10
@@ -410,8 +411,6 @@ def _render_table_images(self, title: str, rows: list[tuple[str, str]]) -> list[
         pages.append(buf.getvalue())
 
     return pages
-
-
     async def _send_id_list_image(
         self, event: AstrMessageEvent, group_id: int, title: str, id_set: set[str]
     ):
