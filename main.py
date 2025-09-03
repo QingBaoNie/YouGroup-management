@@ -1032,6 +1032,7 @@ class AutoRecallKeywordPlugin(Star):
             "封杀",
             "认证", "移除认证",
             "清空白名单",
+            "清空黑名单",
         )
         if message_str.startswith(command_keywords):
             # 认证/移除认证：仅主人，优先分流
@@ -1508,6 +1509,31 @@ class AutoRecallKeywordPlugin(Star):
                 logger.error(f"清空白名单失败: {e}")
                 try:
                     await event.bot.send_group_msg(group_id=int(group_id), message="清空白名单失败，请查看日志")
+                except Exception:
+                    pass
+            return
+
+        # —— 特权命令：清空黑名单（仅主人） ← 新增块
+        if msg.startswith("清空黑名单"):
+            if not self.owner_qq or str(sender_id) != self.owner_qq:
+                try:
+                    resp = await event.bot.send_group_msg(group_id=int(group_id), message="无权使用")
+                    if isinstance(resp, dict) and "message_id" in resp:
+                        asyncio.create_task(self._auto_delete_after(event.bot, resp["message_id"], delay=10))
+                except Exception as e:
+                    logger.error(f"发送无权使用提示失败: {e}")
+                return
+
+            if hasattr(event, "mark_action"):
+                event.mark_action("敏感词插件 - 清空黑名单")
+            try:
+                self.kick_black_list.clear()
+                self.save_json_data()
+                await event.bot.send_group_msg(group_id=int(group_id), message="已清空黑名单！")
+            except Exception as e:
+                logger.error(f"清空黑名单失败: {e}")
+                try:
+                    await event.bot.send_group_msg(group_id=int(group_id), message="清空黑名单失败，请查看日志")
                 except Exception:
                     pass
             return
