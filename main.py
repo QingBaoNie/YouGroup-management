@@ -25,6 +25,10 @@ except Exception:  # 兜底：如果环境没装 aiohttp，这里给出占位提
     aiohttp = None
     logger.error("未检测到 aiohttp，‘我要看美女’接口将无法调用，请安装 aiohttp。")
 
+# ====== 放在类外（模块顶层）=======
+RESOURCE_DIR: Path = Path(__file__).resolve().parent / "resource"
+FONT_PATH: Path = RESOURCE_DIR / "可爱字体.ttf"
+EMOJI_FONT_PATH: Path = RESOURCE_DIR / "NotoColorEmoji.ttf"
 
 @register(
     "YouGroup-management",
@@ -236,9 +240,7 @@ class AutoRecallKeywordPlugin(Star):
         except Exception as e:
             logger.error(f"保存 {self.auth_data_file} 失败：{e}")
 
-RESOURCE_DIR: Path = Path(__file__).resolve().parent / "resource"
-FONT_PATH: Path = RESOURCE_DIR / "可爱字体.ttf"
-EMOJI_FONT_PATH: Path = RESOURCE_DIR / "NotoColorEmoji.ttf"
+
 # =========================================================
 # 图片渲染工具：表格（大标题 / 斑马条 / 自动分页）
 # =========================================================
