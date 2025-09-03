@@ -4,7 +4,8 @@ import re
 import urllib.parse
 import asyncio
 from collections import defaultdict, deque
-
+from pathlib import Path
+import os
 from astrbot import logger
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import filter
@@ -242,10 +243,6 @@ EMOJI_FONT_PATH: Path = RESOURCE_DIR / "NotoColorEmoji.ttf"
 # 图片渲染工具：表格（大标题 / 斑马条 / 自动分页）
 # =========================================================
 def _load_font(self, size: int, emoji: bool = False):
-    """
-    加载字体：emoji=True 时用 NotoColorEmoji，否则用可爱字体。
-    失败则回退默认位图字体。
-    """
     if ImageFont is None:
         return None
     try:
@@ -258,23 +255,18 @@ def _load_font(self, size: int, emoji: bool = False):
         except Exception:
             return None
 
-
-    async def _build_rows_uid_and_name(self, event: AstrMessageEvent, group_id: int, ids: list[str]) -> list[tuple[str, str]]:
-        """把一组QQ号转成[(uid, 显示名), ...]；显示名优先群内名片，再退昵称。"""
-        rows: list[tuple[str, str]] = []
-        # 并发拿名字
-        coros = [self._resolve_display_name_anywhere(event, int(group_id), uid) for uid in ids]
-        names = await asyncio.gather(*coros, return_exceptions=True)
-        for uid, nm in zip(ids, names):
-            name = nm if isinstance(nm, str) and nm else str(uid)
-            rows.append((str(uid), name))
-        return rows
+async def _build_rows_uid_and_name(self, event: AstrMessageEvent, group_id: int, ids: list[str]) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    coros = [self._resolve_display_name_anywhere(event, int(group_id), uid) for uid in ids]
+    names = await asyncio.gather(*coros, return_exceptions=True)
+    for uid, nm in zip(ids, names):
+        name = nm if isinstance(nm, str) and nm else str(uid)
+        rows.append((str(uid), name))
+    return rows
 
 def _render_table_images(self, title: str, rows: list[tuple[str, str]]) -> list[str]:
     if Image is None:
         return []
-
-    # ---- 画布与排版参数 ----
     width = 1080
     max_height = 2200
     padding_lr = 48
@@ -285,13 +277,11 @@ def _render_table_images(self, title: str, rows: list[tuple[str, str]]) -> list[
     header_height = 60
     border = 2
 
-    # ✅ 使用你的字体
-    font_title  = self._load_font(44)                or ImageFont.load_default()
-    font_header = self._load_font(30)                or ImageFont.load_default()
-    font_uid    = self._load_font(28)                or ImageFont.load_default()  # QQ号列
-    font_name   = self._load_font(28, emoji=True)    or ImageFont.load_default()  # 名称列(支持Emoji)
+    font_title  = self._load_font(44)             or ImageFont.load_default()
+    font_header = self._load_font(30)             or ImageFont.load_default()
+    font_uid    = self._load_font(28)             or ImageFont.load_default()
+    font_name   = self._load_font(28, emoji=True) or ImageFont.load_default()
 
-    # 颜色方案（斑马/表头/边框等）
     bg = (250, 250, 252)
     fg = (33, 37, 41)
     grid = (220, 224, 230)
@@ -303,72 +293,57 @@ def _render_table_images(self, title: str, rows: list[tuple[str, str]]) -> list[
         (245, 252, 247),
     ]
 
-    # --- 估算列宽：QQ列按最长QQ，名称列占剩余 ---
-    sample_uid = max((uid for uid, _ in rows), key=len, default="123456789012")
-
     def text_width(s: str, font) -> int:
         if hasattr(font, "getlength"):
             return int(font.getlength(s))
         return font.getsize(s)[0]
 
+    sample_uid = max((uid for uid, _ in rows), key=len, default="123456789012")
     uid_w   = text_width(sample_uid, font_uid) + 40
     title_w = text_width(title, font_title)
     uid_col_w  = min(380, max(260, uid_w))
     name_col_w = width - padding_lr * 2 - uid_col_w
 
-    # 每页最大行数
     static_area = padding_tb + header_height + header_gap + title_gap + padding_tb + font_title.size + 6
     max_rows_per_page = max(1, (max_height - static_area) // row_height)
 
     pages = []
-    total = len(rows)
-    if total == 0:
+    if not rows:
         rows = [("（空）", "（无数据）")]
 
     for page_idx, start in enumerate(range(0, len(rows), max_rows_per_page)):
         subset = rows[start:start + max_rows_per_page]
         height = (
-            padding_tb
-            + font_title.size + 6
-            + title_gap
-            + header_height
-            + header_gap
-            + len(subset) * row_height
-            + padding_tb
-            + border
+            padding_tb + font_title.size + 6 + title_gap +
+            header_height + header_gap + len(subset) * row_height +
+            padding_tb + border
         )
         img = Image.new("RGB", (width, height), bg)
         draw = ImageDraw.Draw(img)
 
-        # 标题（超宽时左对齐，否则居中）
         title_x = (width - title_w) // 2 if title_w < (width - padding_lr * 2) else padding_lr
         title_y = padding_tb
         draw.text((title_x, title_y), title, font=font_title, fill=fg)
 
-        # 表头框
         table_x = padding_lr
         table_top = title_y + font_title.size + 6 + title_gap
         table_bottom = table_top + header_height + header_gap + len(subset) * row_height
 
-        # 外框
         draw.rectangle([table_x - border, table_top - border, width - padding_lr + border, table_bottom + border],
                        outline=grid, width=border)
 
-        # 表头
         header_rect = [table_x, table_top, width - padding_lr, table_top + header_height]
         draw.rectangle(header_rect, fill=header_bg)
-        # 列分割线
+
         draw.line([table_x + uid_col_w, table_top, table_x + uid_col_w,
                    table_top + header_height + header_gap + len(subset)*row_height], fill=grid, width=1)
 
-        # 表头文字
         hpad = 16
         draw.text((table_x + hpad, table_top + (header_height - font_header.size)//2),
                   "QQ号", font=font_header, fill=fg)
         draw.text((table_x + uid_col_w + hpad, table_top + (header_height - font_header.size)//2),
                   "名称", font=font_header, fill=fg)
 
-        # 工具：按列用对应字体做省略
         def ellipsis(text: str, max_w: int, font) -> str:
             if not text:
                 return text
@@ -387,15 +362,12 @@ def _render_table_images(self, title: str, rows: list[tuple[str, str]]) -> list[
                     text = text[:-1]
                 return text + ell if text else ell
 
-        # 数据行
         y = table_top + header_height + header_gap
         for i, (uid, name) in enumerate(subset):
             row_rect = [table_x, y, width - padding_lr, y + row_height]
             draw.rectangle(row_rect, fill=zebra[i % len(zebra)])
-
             uid_text  = ellipsis(uid,  uid_col_w  - hpad*2, font_uid)
             name_text = ellipsis(name, name_col_w - hpad*2, font_name)
-
             draw.text((table_x + hpad, y + (row_height - font_uid.size)//2),
                       uid_text, font=font_uid, fill=fg)
             draw.text((table_x + uid_col_w + hpad, y + (row_height - font_name.size)//2),
@@ -408,43 +380,37 @@ def _render_table_images(self, title: str, rows: list[tuple[str, str]]) -> list[
 
     return pages
 
-    async def _send_id_list_image(self, event: AstrMessageEvent, group_id: int, title: str, id_set: set[str]):
-        """
-        渲染并发送指定 ID 集合的图片版列表；过长自动分页、多图发送。
-        Pillow 缺失时回退为文本列表。
-        """
-        # 排序
+async def _send_id_list_image(self, event: AstrMessageEvent, group_id: int, title: str, id_set: set[str]):
+    try:
+        ids = sorted(id_set, key=lambda x: int(x))
+    except Exception:
+        ids = sorted(id_set)
+
+    if Image is None:
+        lines = await self._format_id_list_with_names(event, int(group_id), ids)
+        text = f"{title}（文本回退） 总计{len(ids)}\n" + ("\n".join(lines) if lines else "（空）")
+        await self._safe_send_group_msg(event.bot, group_id, text)
+        return
+
+    rows = await self._build_rows_uid_and_name(event, int(group_id), ids)
+    paths = self._render_table_images(title, rows)
+
+    if not paths:
+        lines = await self._format_id_list_with_names(event, int(group_id), ids)
+        text = f"{title} 总计{len(ids)}\n" + ("\n".join(lines) if lines else "（空）")
+        await self._safe_send_group_msg(event.bot, group_id, text)
+        return
+
+    for p in paths:
         try:
-            ids = sorted(id_set, key=lambda x: int(x))
-        except Exception:
-            ids = sorted(id_set)
+            abspath = os.path.abspath(p)
+            await event.bot.send_group_msg(
+                group_id=int(group_id),
+                message=[{"type": "image", "data": {"file": f"file:///{abspath}"}}]
+            )
+        except Exception as e:
+            logger.error(f"发送图片失败 {p}: {e}")
 
-        # Pillow 不可用 → 文本回退
-        if Image is None:
-            lines = await self._format_id_list_with_names(event, int(group_id), ids)
-            text = f"{title}（文本回退） 总计{len(ids)}\n" + ("\n".join(lines) if lines else "（空）")
-            await self._safe_send_group_msg(event.bot, group_id, text)
-            return
-
-        rows = await self._build_rows_uid_and_name(event, int(group_id), ids)
-        paths = self._render_table_images(title, rows)
-
-        if not paths:
-            # 极端兜底：依旧文本
-            lines = await self._format_id_list_with_names(event, int(group_id), ids)
-            text = f"{title} 总计{len(ids)}\n" + ("\n".join(lines) if lines else "（空）")
-            await self._safe_send_group_msg(event.bot, group_id, text)
-            return
-
-        # 发送所有分页图片
-        for p in paths:
-            try:
-                await event.bot.send_group_msg(
-                    group_id=int(group_id),
-                    message=[{"type": "image", "data": {"file": f"file://{p}"}}]
-                )
-            except Exception as e:
-                logger.error(f"发送图片失败 {p}: {e}")
 
     # =========================================================
     # 工具函数：将内存数据保存到本地（名单类）
